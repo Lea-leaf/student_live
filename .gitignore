@@ -1,0 +1,79 @@
+# ============================================================================
+# 校园生活平台 · Git 忽略规则
+# ============================================================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib60/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ---------- 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+backend/.venv/
+
+# ---------- 环境变量与密钥 ----------
+.env
+.env.local
+*.env.local
+backend/.env
+
+# ---------- 数据库 ----------
+*.db
+*.sqlite
+*.sqlite3
+backend/school_life.db
+backend/instance/
+
+# ---------- 迁移产物（迁移脚本本身要提交，故只忽略临时文件） ----------
+backend/migrations/versions/__pycache__/
+
+# ---------- 上传文件与日志 ----------
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/app/logs/*.log
+backend/app/logs/*.log.*
+*.log
+
+# ---------- 前端 ----------
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/node_modules/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 临时文件 ----------
+*.tmp
+*.bak
+_tmp/

@@ -1,0 +1,9 @@
+# pnpm 工作区配置
+#
+# esbuild 需要执行安装脚本下载平台二进制；pnpm 10+ 默认拦截依赖构建脚本，
+# 未放行时 vite build 会报找不到 @esbuild/win32-x64。
+packages: []
+
+allowBuilds:
+  esbuild: true
+  vue-demi: true
