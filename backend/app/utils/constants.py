@@ -123,9 +123,10 @@ DEFAULT_CONFIGS = {
     'recycle_retention_count': '10',    # 回收站默认保留最近 N 条
     'recycle_retention_mode': RETENTION_FORCE,  # 超出数量后的处理方式：force=彻底删除
     # 上传
-    'upload_allowed_ext': 'jpg,jpeg,png,gif,webp,mp4,mov',
+    'upload_allowed_ext': 'jpg,jpeg,png,gif,webp,mp4,mov,mp3,wav,m4a,ogg,webm',
     'upload_max_mb_image': '10',
     'upload_max_mb_video': '50',        # 需求默认 50MB
+    'upload_max_mb_audio': '5',         # 语音（评论 / 私信）默认 5MB
     # 分页
     'page_default_size': '10',
     'page_max_size': '100',

@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 4173"
+    "preview": "vite preview --port 4173",
+    "check:messagebox": "node scripts/check-messagebox.js",
+    "check": "node scripts/check-messagebox.js"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",

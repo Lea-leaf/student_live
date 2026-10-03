@@ -70,11 +70,16 @@ class BaseConfig:
     # ---- 上传 ----
     UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', os.path.join(BASE_DIR, 'uploads'))
     MAX_CONTENT_LENGTH = _int('MAX_CONTENT_MB', 50) * 1024 * 1024  # 需求默认 50MB
+    #: 允许上传的后缀（图片 / 视频 / 语音）
     ALLOWED_EXTENSIONS = set(
-        os.getenv('ALLOWED_EXTENSIONS', 'jpg,jpeg,png,gif,webp,mp4,mov').replace(' ', '').split(',')
+        os.getenv('ALLOWED_EXTENSIONS',
+                  'jpg,jpeg,png,gif,webp,mp4,mov,mp3,wav,m4a,ogg,webm')
+        .replace(' ', '').split(',')
     )
     IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}
     VIDEO_EXTENSIONS = {'mp4', 'mov', 'avi', 'webm', 'mkv'}
+    #: 语音：评论/私信可发语音，上限单独一档（默认 5MB，约 60 秒）
+    AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'ogg', 'aac', 'amr', 'silk', 'webm'}
 
     # ---- 分页 ----
     DEFAULT_PAGE_SIZE = _int('DEFAULT_PAGE_SIZE', 10)

@@ -94,10 +94,28 @@ class UploadFile(BaseModel):
     path = db.Column(db.String(255), nullable=False, comment='相对路径')
     url = db.Column(db.String(255), nullable=False, comment='访问地址')
     mime = db.Column(db.String(64), nullable=True, comment='MIME 类型')
-    media_type = db.Column(db.String(16), nullable=False, default='image', comment='image / video')
+    media_type = db.Column(db.String(16), nullable=False, default='image',
+                           comment='image / video / audio')
     size = db.Column(db.Integer, nullable=False, default=0, comment='字节数')
-    #: 可挂载到帖子；未挂载的视为临时文件，可由定时任务清理（预留）
-    post_id = db.Column(db.Integer, nullable=True, index=True, comment='关联帖子ID')
+    #: 兼容旧数据：只挂帖子的记录仍用这个字段
+    post_id = db.Column(db.Integer, nullable=True, index=True, comment='关联帖子ID（兼容保留）')
+    #: 通用关联：媒体可以挂在帖子 / 评论 / 私信上，避免评论与私信的图算作孤儿文件
+    #: owner_type 取值：post / comment / message / avatar；owner_id 为对应记录的主键
+    owner_type = db.Column(db.String(16), nullable=True, index=True, comment='归属类型')
+    owner_id = db.Column(db.Integer, nullable=True, index=True, comment='归属记录ID')
+
+    __table_args__ = (
+        db.Index('ix_upload_owner', 'owner_type', 'owner_id'),
+    )
+
+    def attach_to(self, owner_type, owner_id):
+        """把文件挂到某个业务对象上（帖子/评论/私信）。"""
+        self.owner_type = owner_type
+        self.owner_id = owner_id
+        if owner_type == 'post':
+            # 保持旧字段同步，历史代码与统计不受影响
+            self.post_id = owner_id
+        return self
 
 
 class AdminModuleAccess(BaseModel):

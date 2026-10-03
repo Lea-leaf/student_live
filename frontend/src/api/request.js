@@ -20,6 +20,13 @@ export const REFRESH_KEY = 'slp_refresh_token'
  */
 export const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
 
+/**
+ * 文件上传专用超时（毫秒）。
+ * 普通接口用 20 秒足够，但视频最大 50MB，慢网络下 20 秒传不完，
+ * 会被 axios 判为超时而中断。上传单独放宽到 5 分钟。
+ */
+export const UPLOAD_TIMEOUT = Number(import.meta.env.VITE_UPLOAD_TIMEOUT || 5 * 60 * 1000)
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
 }
@@ -121,7 +128,9 @@ service.interceptors.response.use(
     }
     // 2004 账号被封禁：给出明确弹窗
     if (code === 2004) {
-      ElMessageBox.alert(msg || '账号已被封禁', '访问受限', { type: 'error' })
+      // .catch 必须加：用户点 × / ESC 关闭弹窗时 ElMessageBox 会 reject，
+      // 不接住控制台就报 Uncaught (in promise) cancel
+      ElMessageBox.alert(msg || '账号已被封禁', '访问受限', { type: 'error' }).catch(() => {})
       return Promise.reject(body)
     }
 
@@ -154,17 +163,26 @@ service.interceptors.response.use(
 
 /**
  * 上传文件（multipart/form-data）
+ *
+ * ⚠️ 必须单独覆盖 timeout：全局 axios 实例是 20 秒，
+ * 图片几秒能传完没问题，但**视频（最大 50MB）在 20 秒内很可能传不完**，
+ * 会直接报「请求超时」而不是显示上传进度 —— 这是实际踩过的坑。
+ * 这里给上传单独放宽到 5 分钟；进度条照常工作，不会一直干等。
+ *
  * @param {string} url 接口地址
  * @param {File[]} files 文件列表
  * @param {object} extra 额外表单字段
  * @param {Function} onProgress 进度回调（0-100）
+ * @param {number} timeout 可选：自定义超时（毫秒）
  */
-export function upload(url, files, extra = {}, onProgress) {
+export function upload(url, files, extra = {}, onProgress, timeout = UPLOAD_TIMEOUT) {
   const formData = new FormData()
   files.forEach((file) => formData.append('files', file))
   Object.entries(extra).forEach(([key, value]) => formData.append(key, value))
   return service.post(url, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    // 上传不跟全局 20s 超时走，否则大视频必然超时
+    timeout,
     onUploadProgress: (event) => {
       if (onProgress && event.total) {
         onProgress(Math.round((event.loaded * 100) / event.total))

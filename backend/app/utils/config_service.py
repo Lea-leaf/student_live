@@ -192,6 +192,7 @@ def _CONFIG_META():
         'upload_allowed_ext': {'group': 'upload', 'title': '允许的文件后缀'},
         'upload_max_mb_image': {'group': 'upload', 'title': '图片大小上限(MB)', 'value_type': 'int'},
         'upload_max_mb_video': {'group': 'upload', 'title': '视频大小上限(MB)', 'value_type': 'int'},
+        'upload_max_mb_audio': {'group': 'upload', 'title': '语音大小上限(MB)', 'value_type': 'int'},
         'page_default_size': {'group': 'common', 'title': '默认分页条数', 'value_type': 'int'},
         'page_max_size': {'group': 'common', 'title': '最大分页条数', 'value_type': 'int'},
         'guest_can_list': {'group': 'guest', 'title': '游客可浏览列表', 'value_type': 'bool'},

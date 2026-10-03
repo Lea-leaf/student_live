@@ -106,7 +106,7 @@ async function resetAll() {
     ElMessage.success('已恢复默认配置')
     load()
   } catch (error) {
-    // 取消
+    // 取消或接口报错（ElMessageBox 关闭时会 reject，必须吞掉）
   }
 }
 </script>

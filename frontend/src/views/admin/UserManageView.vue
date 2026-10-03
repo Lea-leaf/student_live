@@ -92,7 +92,8 @@ async function resetPassword(row) {
       { inputPlaceholder: '新密码（可留空）', confirmButtonText: '确认重置' }
     )
     const data = await adminApi.users.resetPassword(row.id, value ? { new_password: value } : {})
-    ElMessageBox.alert(`账号：${data.student_id}\n新密码：${data.new_password}`, '重置成功', {
+    // 必须 await：关闭弹窗会 reject，不接住会报 Uncaught (in promise) cancel
+    await ElMessageBox.alert(`账号：${data.student_id}\n新密码：${data.new_password}`, '重置成功', {
       confirmButtonText: '知道了'
     })
   } catch (error) {
@@ -161,7 +162,8 @@ async function removeUser(row) {
 
     const data = await adminApi.users.remove(row.id, { confirm_student_id: value.trim() })
     const totalFiles = (data.media_files || 0) + (data.leftover_files || 0)
-    ElMessageBox.alert(
+    // 必须 await：关闭弹窗会 reject，不接住会报 Uncaught (in promise) cancel
+    await ElMessageBox.alert(
       `已删除用户 ${data.student_id}\n\n` +
         `帖子 ${data.posts} 条｜评论 ${data.comments} 条｜收藏 ${data.favorites} 条\n` +
         `媒体记录 ${data.media_rows} 条｜磁盘文件 ${totalFiles} 个`,

@@ -84,7 +84,9 @@ async function resetPassword() {
       confirmButtonText: '确认重置'
     })
     const data = await adminApi.users.resetPassword(userId, value ? { new_password: value } : {})
-    ElMessageBox.alert(`新密码：${data.new_password}`, '重置成功')
+    // ⚠️ 必须 await（或 catch）：ElMessageBox 在用户点 × / ESC 关闭时会 reject，
+    // 不接住就会冒成 Uncaught (in promise) cancel
+    await ElMessageBox.alert(`新密码：${data.new_password}`, '重置成功')
   } catch (error) {
     // 取消
   }

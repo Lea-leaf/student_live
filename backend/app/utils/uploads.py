@@ -59,20 +59,38 @@ def allowed_file(filename):
     return ext in current_app.config.get('ALLOWED_EXTENSIONS', set())
 
 
-def _media_type_of(ext):
+def media_type_of(ext):
+    """按后缀判断媒体类型：image / video / audio。
+
+    ⚠️ 早期实现是「是 video 就 video，否则一律 image」，
+    导致 mp3 被当成图片、并且套用了图片的大小限制。
+    现在显式判断 audio，未知后缀才回落到 image。
+    """
+    ext = (ext or '').lower()
     if ext in current_app.config.get('VIDEO_EXTENSIONS', set()):
         return 'video'
+    if ext in current_app.config.get('AUDIO_EXTENSIONS', set()):
+        # 注意：webm 同时在视频与音频集合里，按后缀无法区分；
+        # 视频集合优先（上面的判断已覆盖），音频侧用 mime 兜底在 save_media 里做。
+        return 'audio'
     return 'image'
 
 
+#: 兼容旧调用名（内部与脚本可能引用）
+_media_type_of = media_type_of
+
+
 def _size_limit(media_type):
-    """按类型取大小上限（字节）。"""
+    """按类型取大小上限（字节）。图片 10MB / 视频 50MB / 语音 5MB，均可在后台配置。"""
     from .config_service import get_config_int
 
-    key = 'upload_max_mb_video' if media_type == 'video' else 'upload_max_mb_image'
-    default = 50 if media_type == 'video' else 10
-    mb = get_config_int(key, default)
-    return mb * 1024 * 1024
+    limits = {
+        'video': ('upload_max_mb_video', 50),
+        'audio': ('upload_max_mb_audio', 5),
+        'image': ('upload_max_mb_image', 10),
+    }
+    key, default = limits.get(media_type, limits['image'])
+    return get_config_int(key, default) * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------

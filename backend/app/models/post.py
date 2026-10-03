@@ -52,8 +52,10 @@ class Post(BaseModel):
     # ---- 运营 ----
     is_top = db.Column(db.Boolean, nullable=False, default=False, index=True, comment='是否置顶')
     view_count = db.Column(db.Integer, nullable=False, default=0, comment='浏览量')
-    comment_count = db.Column(db.Integer, nullable=False, default=0, comment='评论数')
+    comment_count = db.Column(db.Integer, nullable=False, default=0, comment='评论数（含楼中楼回复）')
     favorite_count = db.Column(db.Integer, nullable=False, default=0, comment='收藏数')
+    #: 点赞与收藏是独立功能，各自计数互不影响
+    like_count = db.Column(db.Integer, nullable=False, default=0, comment='点赞数')
 
     # ---- 软删除（回收站） ----
     is_deleted = db.Column(db.Boolean, nullable=False, default=False, index=True, comment='是否已删除(软删除)')
@@ -95,7 +97,11 @@ class Post(BaseModel):
         return data
 
     def to_brief(self):
-        """列表页精简字段，减少传输体积。"""
+        """列表页精简字段，减少传输体积。
+
+        注意：点赞数、收藏数、评论数都要带上 —— 列表卡片上会显示，
+        漏掉的话前端拿到的是 undefined（曾漏过 like_count）。
+        """
         return {
             'id': self.id,
             'type': self.type,
@@ -110,6 +116,8 @@ class Post(BaseModel):
             'is_top': self.is_top,
             'view_count': self.view_count,
             'comment_count': self.comment_count,
+            'favorite_count': self.favorite_count,
+            'like_count': self.like_count,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'author': self.author.to_brief() if self.author else None,
             'module_name': self.module_ref.name if self.module_ref else self.type,

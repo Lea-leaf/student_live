@@ -25,7 +25,7 @@ Project_graduation/
 │   │   ├── __init__.py           应用工厂（扩展、蓝图、错误处理、CLI）
 │   │   ├── config.py             三级配置：开发 / 测试 / 生产
 │   │   ├── extensions.py         db / migrate / cors 单例
-│   │   ├── models/               数据模型（users / posts / modules / 日志 / 配置 …）
+│   │   ├── models/               数据模型（用户/帖子/模块/互动/点赞/日志/配置）
 │   │   ├── modules/              业务模块（每个模块一个文件夹）
 │   │   │   ├── auth/             认证：注册 / 登录 / 资料 / 安全公告
 │   │   │   ├── lost_found/       失物招领（P0）
@@ -33,21 +33,27 @@ Project_graduation/
 │   │   │   ├── favorites/        收藏
 │   │   │   ├── reports/          举报
 │   │   │   ├── notifications/    通知
-│   │   │   ├── comments/         评论（v1.2，接口已固定）
-│   │   │   ├── messages/         私信（v1.2，接口已固定）
+│   │   │   ├── comments/         评论（删除已可用；发表待实现）
+│   │   │   ├── messages/         私信（待实现）
 │   │   │   └── posts_service.py  跨模块共用的帖子领域服务
-│   │   ├── admin/                管理端（dashboard/users/posts/modules/logs/trash/reports/configs）
+│   │   ├── admin/                管理端（dashboard/users/posts/comments/modules/logs/trash/reports/configs）
 │   │   ├── utils/                响应封装 / JWT / 校验 / 上传 / 配置服务 / 日志 / 验证码 / 种子数据
+│   │   │                         清理服务（cleanup）/ 媒体引用（media_refs）
 │   │   └── logs/                 运行日志（app.log / error.log）
 │   ├── migrations/               Flask-Migrate 迁移目录
-│   ├── scripts/                  开发脚本（dev_init / smoke_test / gen_schema_docs）
-│   ├── tests/                    pytest 用例（63 个，含媒体地址一致性回归）
-│   ├── scripts/                  开发脚本（初始化/冒烟/迁移/一致性自检）
+│   ├── scripts/                  开发脚本：dev_init / smoke_test / gen_schema_docs /
+│   │                             upgrade_schema（结构升级）/ migrate_upload_layout（目录迁移）/
+│   │                             fix_media_references（引用修复）/ check_orphans（一致性自检）/
+│   │                             fix_ps1_bom（脚本编码修复）/ verify_media_storage
+│   ├── tests/                    pytest 用例（90 个）
+│   │                             含结构收口、媒体地址一致性、视频语音上传、序列化字段完整性
 │   ├── uploads/                  上传的媒体文件（按 <学号>/<日期> 分目录）
 │   ├── requirements.txt
 │   ├── .env.example
 │   └── run.py                    开发启动入口
 ├── frontend/                     Vue3 前端
+│   ├── public/                   favicon.svg（站点图标）
+│   ├── scripts/                  check-messagebox.js（静态检查未处理的 MessageBox 调用）
 │   ├── src/
 │   │   ├── api/                  接口封装（request 拦截器 + 各模块地址）
 │   │   ├── components/           PostCard 等复用组件
@@ -185,20 +191,37 @@ pnpm preview          # 本地预览构建产物
 ## 三、自测与验证
 
 ```powershell
+# ---------- 后端 ----------
 cd backend
 
-# 单元 / 接口测试（内存库，63 个用例）
+# 单元 / 接口测试（内存库，90 个用例）
 .\.venv\Scripts\python.exe -m pytest tests -q
 
 # 端到端冒烟（需先启动后端服务，42 项断言）
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 
+# 结构升级（改了模型 / 拉了新代码后执行；幂等，只加列不删数据）
+.\.venv\Scripts\python.exe scripts\upgrade_schema.py --check   # 先预演
+.\.venv\Scripts\python.exe scripts\upgrade_schema.py
+
+# 数据一致性自检（孤儿指针 + 孤儿文件）
+.\.venv\Scripts\python.exe scripts\check_orphans.py
+
 # 改动模型后同步生成建表 SQL 与 ER 图
 .\.venv\Scripts\python.exe scripts\gen_schema_docs.py
+
+# ---------- 前端 ----------
+cd ..\frontend
+
+# 静态检查：未接住 reject 的 ElMessageBox 调用（避免控制台报 cancel）
+pnpm run check
+
+# 生产构建
+pnpm run build
 ```
 
-已验证结果：**pytest 63 passed**，**HTTP 冒烟 42/42 通过**，**前端 `vite build` 成功**，
-Vite 开发代理 `/api` → Flask 联通。
+已验证结果：**pytest 90 passed**，**HTTP 冒烟 42/42 通过**，**`pnpm run check` 0 处问题**，
+**前端 `vite build` 成功**，Vite 开发代理 `/api` → Flask 联通。
 
 ---
 
@@ -252,8 +275,9 @@ Vite 开发代理 `/api` → Flask 联通。
 | | `audited_by` / `audited_at` | int / datetime | 审核人、审核时间 |
 | **运营** | `is_top` | bool | 是否置顶 |
 | | `view_count` | int | 浏览量（详情页自动 +1，作者与管理员查看不计数） |
-| | `comment_count` | int | 评论数（删除评论时自动回写，避免计数漂移） |
+| | `comment_count` | int | 评论数（含楼中楼回复；删评论时自动回写，避免计数漂移） |
 | | `favorite_count` | int | 收藏数 |
+| | **`like_count`** | int | **点赞数**（与收藏是**两个独立功能**，各自计数） |
 | **软删除** | `is_deleted` | bool | 是否进回收站（普通用户完全看不到） |
 | | `deleted_at` / `deleted_by` | datetime / int | 删除时间、删除人 |
 | **扩展** | **`ext_json`** | text | **模块特有字段的 JSON**（见 5.4） |
@@ -262,9 +286,10 @@ Vite 开发代理 `/api` → Flask 联通。
 索引：`type + status + is_deleted`（列表筛选）、`audit_status + created_at`（审核台），
 以及 `type`、`user_id`、`status`、`audit_status`、`is_deleted`、`is_top` 单列索引。
 
-### 5.3 `media` 字段（图片 / 视频）
+### 5.3 `media` 字段（图片 / 视频 / 语音）
 
-存的是 **JSON 数组**，每项结构如下（由上传接口返回，数据库不存文件本身）：
+存的是 **JSON 数组**，每项结构如下（由上传接口返回，数据库不存文件本身）。
+**评论与私信的媒体用的是完全相同的结构**，因此存储、上传、展示三层都能复用：
 
 ```json
 [
@@ -276,9 +301,29 @@ Vite 开发代理 `/api` → Flask 联通。
     "type": "image",
     "size": 10241,
     "mime": "image/png"
+  },
+  {
+    "id": 2,
+    "url": "/api/v1/files/20210001/20261002/7d21e0f4....mp3",
+    "path": "20210001/20261002/7d21e0f4....mp3",
+    "name": "语音留言.mp3",
+    "type": "audio",
+    "size": 20480,
+    "mime": "audio/mpeg"
   }
 ]
 ```
+
+| 键 | 含义 |
+|---|---|
+| `url` | 前端直接引用；实际文件在 `uploads/<学号>/<日期>/` 下 |
+| `path` | 相对 `uploads/` 的路径（与 `upload_files` 表一致） |
+| `type` | `image` / `video` / `audio` |
+| `name` / `size` / `mime` | 原始文件名、字节数、MIME 类型 |
+
+> ⚠️ **媒体地址在数据库里存了两处**：`posts.media`（以及 `comments.media`、`messages.media`）
+> 与 `upload_files` 表。改存储布局时必须同时更新，否则页面会 404（详见 [docs/DATA.md](docs/DATA.md)）。
+> `upload_files` 用 `owner_type` + `owner_id` 指向归属对象（`post` / `comment` / `message`）。
 
 | 键 | 含义 |
 |---|---|
@@ -311,19 +356,23 @@ Vite 开发代理 `/api` → Flask 联通。
 前端按 `type` 渲染不同表单与展示样式，后端只做透传存取，
 **新增模块不需要改数据库、不需要改接口签名**。
 
-### 5.5 帖子与「评论 / 收藏」的关系
+### 5.5 帖子与「评论 / 点赞 / 收藏」的关系
 
 ```mermaid
 erDiagram
     users ||--o{ posts : "发布"
     modules ||..o{ posts : "type 分类（逻辑关联，非外键）"
     posts ||--o{ comments : "一对多"
-    posts ||--o{ favorites : "一对多"
+    posts ||--o{ favorites : "收藏（私有书签）"
+    posts ||--o{ post_likes : "点赞（公开计数）"
     posts ||--o{ reports : "一对多"
     posts ||--o{ upload_files : "media 里的每个文件一条记录"
-    comments ||--o{ comments : "parent_id 一级回复"
+    comments ||--o{ comments : "parent_id 直接父级"
+    comments ||--o{ comments : "root_id 顶级评论（楼中楼）"
+    comments ||--o{ comment_likes : "评论点赞"
     users ||--o{ comments : "评论人"
     users ||--o{ favorites : "收藏人"
+    users ||--o{ post_likes : "点赞人"
 ```
 
 > **注意 `modules` 与 `posts` 的关系**：`posts.type` 存的是 `modules.code` 的值，
@@ -334,17 +383,34 @@ erDiagram
 
 | 交互 | 表 | 关键字段 | 说明 |
 |---|---|---|---|
-| **评论** | `comments` | `post_id`、`user_id`、`content`、`parent_id`、`is_deleted` | 支持**一级回复**（`parent_id` 指向父评论）；删除走软删除并回写 `posts.comment_count` |
-| **收藏**（当前唯一实现的互动计数） | `favorites` | `user_id` + `post_id`，**唯一约束** `uq_favorite_user_post` | 同一个用户对同一帖子只能有一条，切换即「收藏 / 取消收藏」；帖子表的 `favorite_count` 是它的冗余计数。表里同时有 `created_at`，所以也记录了收藏时间 |
+| **评论（楼中楼）** | `comments` | `post_id`、`user_id`、`parent_id`、**`root_id`**、`reply_to_user_id`、**`media`**、`like_count`、`reply_count` | `parent_id` 指向**直接父级**、`root_id` 指向**顶级评论**：查一层用前者，一次取整棵子树用后者（不用递归查库）。`media` 支持**图片与语音**，结构与帖子一致 |
+| **评论点赞** | `comment_likes` | `user_id` + `comment_id`，唯一约束 `uq_comment_like_user_comment` | 每条评论独立计数 |
+| **帖子点赞** | `post_likes` | `user_id` + `post_id`，唯一约束 `uq_post_like_user_post` | 帖子表的 `like_count` 是它的冗余计数 |
+| **收藏** | `favorites` | `user_id` + `post_id`，唯一约束 `uq_favorite_user_post` | 语义是**私有书签**（"留着以后看"），与点赞**互相独立** |
 | **举报** | `reports` | `post_id`、`reporter_id`、`reason`、`status` | 管理员处理后可联动删除帖子或封禁用户 |
 | **通知** | `notifications` | `user_id`、`type`、`ref_id`、`is_read` | 审核结果、评论、私信、系统公告统一走这里 |
 
-> **关于「点赞」**：当前实现是 `favorites` 表（语义为"收藏"，用户在详情页点收藏按钮）。
-> 如果要做成独立的**点赞**（和收藏分开、可显示点赞数），只需新增一张
-> `post_likes(user_id, post_id)` 表 —— 结构完全照 `favorites` 抄，唯一约束同理；
-> 帖子表加一个 `like_count` 冗余字段即可。**不需要改 posts 表的主结构。**
+> **为什么点赞与收藏要分成两张表**：语义与可见性不同 ——
+> 收藏是私有书签、只有自己看得到列表；点赞是公开表态、计数显示在帖子卡片上。
+> 合并成一张表加 `type` 字段虽然可行，但会让「我的收藏」和「点赞数」的查询互相干扰。
 
-### 5.6 一条完整帖子的 API 返回示例
+### 5.6 媒体类型与大小限制
+
+图片 / 视频 / **语音** 三类走同一套存储与访问链路，只是大小限制分档：
+
+| 类型 | 判断依据 | 默认上限 | 配置键 |
+|---|---|---|---|
+| `image` | `jpg/jpeg/png/gif/webp/bmp` | 10 MB | `upload_max_mb_image` |
+| `video` | `mp4/mov/avi/webm/mkv` | 50 MB | `upload_max_mb_video` |
+| **`audio`** | `mp3/wav/m4a/ogg/aac/amr/silk/webm` | **5 MB** | `upload_max_mb_audio` |
+
+> ⚠️ 早期实现是「是 video 就 video，**否则一律 image**」，导致 `mp3` 被当成图片、
+> 并套用了图片的 10MB 限制。现在显式判断三类，未知后缀才回落到 `image`。
+>
+> 前端上传单独放宽了超时（`UPLOAD_TIMEOUT`，默认 5 分钟）：全局 axios 是 20 秒，
+> 图片够用但**视频必然超时**，这是实际踩过的坑。
+
+### 5.7 一条完整帖子的 API 返回示例
 
 ```json
 {
@@ -378,7 +444,7 @@ erDiagram
 > 列表接口返回的是精简版（`to_brief()`）：`content` 截断 80 字、`media` 只带第一张图，
 > 减少传输体积；详情接口返回完整字段。
 
-### 5.7 这套设计对答辩的价值
+### 5.8 这套设计对答辩的价值
 
 | 结论 | 证据 |
 |---|---|
@@ -420,6 +486,8 @@ erDiagram
 
 9. **数据库平滑迁移**：开发用 SQLite，部署切 MySQL 只需改 `.env` 里的 `DATABASE_URL`；
    已集成 Flask-Migrate，并额外提供自动生成的 MySQL 建表脚本。
+   **注意**：`db.create_all()` 只建缺失的表、**不给已有表加列**，所以结构变更（加列/加表）
+   一律走 `scripts/upgrade_schema.py`（幂等、只加不删、带数据回填）。
 
 10. **安全基线**：密码 Werkzeug scrypt 哈希（自带盐）；JWT 含签发者与过期时间；
     登录失败按 IP+账号节流；封禁用户即时失效（每次请求校验状态）；
@@ -433,10 +501,13 @@ erDiagram
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | v1.0 原型 | 登录注册、角色权限、失物招领、管理员用户/帖子列表、审核、回收站、日志、收藏、举报、通知 | ✅ 已完成 |
-| v1.1 | 审核流程细化、通知中心、操作日志可视化、回收站策略配置 | ✅ 已完成（提前纳入 v1.0） |
-| v1.2 | 评论、私信（预留 WebSocket 实时通道） | 接口已固定，返回「待开放」 |
-| v1.3 | 模块管理增强、二手交易模块业务实现 | 模块骨架已就绪 |
+| v1.1 | 结构收口（楼中楼评论字段、评论/私信媒体、点赞独立建表、音频支持、结构升级脚本） | ✅ 已完成（表结构与迁移脚本就绪） |
+| v1.2 | 评论发表/回复/语音（楼中楼）、评论点赞、私信收发与已读回执 | 表结构已就绪，**待写接口与前端** |
+| v1.3 | 模块管理增强、二手交易 / 组队打车 / 交友三类模块（填 `ext_json` + 前端表单即可） | 模块骨架已就绪 |
 | v2.0 | 移动端拆分、多级管理员（RBAC 生效）、Docker 部署上线 | 表与常量已预留 |
+
+> **v1.2 为什么能"填"得很快**：评论的楼中楼、媒体、点赞字段全部已经建好
+> （见第五节），接下来只需要写接口与前端组件，**不用再动数据库**。
 
 ---
 
@@ -447,6 +518,30 @@ A：请在 `backend` 目录下执行（`run.py` 所在目录）。
 
 **Q：前端页面能打开但数据一直报错？**
 A：确认后端已在 `127.0.0.1:5000` 启动；前端请求经 Vite 代理转发，后端未启动时会在页面右上角提示网络异常。
+
+**Q：控制台报 `Unchecked runtime.lastError: The message port closed...` 或
+`A listener indicated an asynchronous response by returning true...`？**
+A：**这是浏览器扩展的噪音，与本项目无关，不用改。** 它是 Chromium 内核的标准提示：
+某个扩展的 content script 向它的后台发了消息，但页面在回复到达前就跳转/关闭了，
+所以每次**路由切换**都可能出现。
+
+三条判据：
+1. 本项目代码里**没有任何** `chrome.*` / `sendMessage` / `onMessage` / `MessageChannel` 调用；
+2. 报错位置显示的是**页面 URL**（如 `:5173/#/publish:1`）而不是 `src/` 下的文件——`:1` 只是占位行号；
+3. 浏览器命令行里能看到 `--extension-process --renderer-sub-type=extension`。
+
+**功能测试时建议用无痕窗口**（`Ctrl+Shift+N`，默认禁用扩展），控制台会干净很多，
+不至于把真正的错误淹没掉。
+
+**Q：控制台报 `Uncaught (in promise) cancel`（文件指向 `messageBox.ts`）？**
+A：这是 `ElMessageBox` 在用户点 `×` / `ESC` / 遮罩关闭时 **reject** 造成的，
+说明某处调用**既没 `await`（在有 try 的位置）也没 `.catch()`**。
+用 `cd frontend && pnpm run check` 静态扫描定位，修法二选一：
+
+```javascript
+try { await ElMessageBox.alert('...') } catch { /* 用户关闭 */ }
+ElMessageBox.alert('...').catch(() => {})
+```
 
 **Q：`pnpm install` 后 `vite build` 报找不到 esbuild？**
 A：pnpm 10+ 默认拦截依赖构建脚本，本项目已在 `frontend/pnpm-workspace.yaml` 中放行 `esbuild`；

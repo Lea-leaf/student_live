@@ -78,7 +78,9 @@ function viewTarget(row) {
      </div>`,
     `举报 #${row.id}`,
     { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
-  )
+  ).catch(() => {
+    // 用户点 × / ESC 关闭时会 reject，必须吞掉，否则报 Uncaught (in promise) cancel
+  })
 }
 </script>
 

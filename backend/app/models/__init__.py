@@ -3,6 +3,7 @@
 
 from .base import BaseModel, paginate
 from .interaction import Comment, Favorite, Message, Notification, Report
+from .like import CommentLike, PostLike
 from .module import Module, default_modules
 from .post import Post
 from .system import AdminModuleAccess, LoginLog, OperationLog, SystemConfig, UploadFile
@@ -20,6 +21,8 @@ __all__ = [
     'Favorite',
     'Report',
     'Notification',
+    'PostLike',
+    'CommentLike',
     'OperationLog',
     'LoginLog',
     'SystemConfig',
