@@ -11,6 +11,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 export const TOKEN_KEY = 'slp_access_token'
 export const REFRESH_KEY = 'slp_refresh_token'
 
+/**
+ * 接口前缀：全局唯一来源。
+ *
+ * ⚠️ `src/api/index.js` 里的所有路径都**不含**这个前缀，由 axios 的 baseURL 统一加上。
+ * 早期两处各写了一份 `/api/v1`，结果拼成 `/api/v1/api/v1/auth/login`，登录直接 404。
+ * 需要在前缀之外发请求（例如健康检查、静态资源判断）时，从这里取，不要再写一份。
+ */
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api/v1'
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
 }
@@ -27,15 +36,31 @@ export function clearToken() {
 
 const service = axios.create({
   // 开发环境走 Vite 代理；生产环境同域部署时也无需改
-  baseURL: import.meta.env.VITE_API_BASE || '/api/v1',
+  baseURL: API_BASE,
   timeout: 20000
 })
 
 // ---------------------------------------------------------------------------
-// 请求拦截：注入 token
+// 运行时自检：请求地址若出现重复前缀，说明有人又硬编码了前缀，立即报错而不是静默 404
+// ---------------------------------------------------------------------------
+function assertNoDoubledPrefix(config) {
+  const url = config.url || ''
+  if (url.startsWith(API_BASE)) {
+    const message = `[api] 接口地址重复了前缀：baseURL="${API_BASE}" + url="${url}"。
+请把 src/api/index.js 里的路径写成相对形式（例如 '/auth/login'），前缀由 baseURL 统一提供。`
+    console.error(message)
+    ElMessage.error('接口配置错误：请求地址重复了 /api/v1 前缀，请查看控制台')
+    throw new Error(message)
+  }
+  return config
+}
+
+// ---------------------------------------------------------------------------
+// 请求拦截：前缀自检 + 注入 token
 // ---------------------------------------------------------------------------
 service.interceptors.request.use(
   (config) => {
+    assertNoDoubledPrefix(config)
     const token = getToken()
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
@@ -47,6 +72,23 @@ service.interceptors.request.use(
 
 // 未登录跳转只弹一次，避免并发请求刷屏
 let redirecting = false
+
+/**
+ * 跳转登录页。
+ * 优先用 SPA 路由（不刷新页面、保留当前路径作为 redirect），
+ * 拿不到 router 时才退回改 hash —— 直接改 hash 会整页刷新，登录态与 Pinia 状态都会丢。
+ */
+async function goLogin(redirectPath) {
+  const target = `/auth/login?redirect=${encodeURIComponent(redirectPath || '/')}`
+  try {
+    const { default: router } = await import('@/router')
+    await router.replace(target)
+    return
+  } catch (error) {
+    console.warn('[api] 路由跳转失败，退回 hash 方式：', error?.message)
+  }
+  window.location.hash = `#${target}`
+}
 
 // ---------------------------------------------------------------------------
 // 响应拦截：拆包 + 错误处理
@@ -69,9 +111,9 @@ service.interceptors.response.use(
       if (!redirecting) {
         redirecting = true
         ElMessage.warning(msg || '登录已过期，请重新登录')
-        const redirect = encodeURIComponent(window.location.hash.replace(/^#/, '') || '/')
-        setTimeout(() => {
-          window.location.hash = `#/login?redirect=${redirect}`
+        const current = window.location.hash.replace(/^#/, '') || '/'
+        setTimeout(async () => {
+          await goLogin(current)
           redirecting = false
         }, 300)
       }

@@ -174,7 +174,7 @@ def create_post():
             files = request.files.getlist('files')
             media = []
             if files:
-                media, errors = save_media_list(files, user_id=user.id)
+                media, errors = save_media_list(files, user=user)
                 if errors:
                     return error('；'.join(errors), 6001)
         else:
@@ -204,7 +204,7 @@ def upload_media():
     files = request.files.getlist('files') or request.files.getlist('file')
     if not files:
         return error('请选择要上传的文件', 6003)
-    media, errors = save_media_list(files, user_id=current_user().id)
+    media, errors = save_media_list(files, user=current_user())
     if errors and not media:
         return error('；'.join(errors), 6001)
     return success({'media': media, 'errors': errors}, msg='上传成功')

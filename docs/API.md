@@ -1,4 +1,6 @@
-# 校园生活平台 · API 接口文档
+# 校园生活平台 · API 接口文档    
+
+
 
 - **统一前缀**：`/api/v1`
 - **数据格式**：`application/json`（上传接口为 `multipart/form-data`）
@@ -6,6 +8,7 @@
 - **开发地址**：`http://127.0.0.1:5000`；前端通过 Vite 代理 `http://127.0.0.1:5173/api` 访问
 
 ---
+
 
 ## 一、统一响应结构
 
@@ -141,7 +144,7 @@
   "location": "图书馆三楼",
   "happened_at": "2026-03-01 15:30:00",
   "contact": "微信 xiaoming2021",
-  "media": [{ "id": 3, "url": "/api/v1/files/20260301/xxx.jpg", "type": "image", "name": "伞.jpg" }]
+  "media": [{ "id": 3, "url": "/api/v1/files/20210001/20260301/xxx.jpg", "type": "image", "name": "伞.jpg" }]
 }
 ```
 
@@ -169,6 +172,15 @@
 | 已认领 | ✅ | ❌（作者与管理员除外） |
 | 已过期 | ✅ | ❌（作者与管理员除外） |
 | 已关闭 | ❌ | ❌（作者与管理员除外） |
+
+**媒体文件存放规则**
+
+| 项 | 值 |
+|---|---|
+| 磁盘路径 | `backend/uploads/<学号>/<YYYYMMDD>/<uuid>.<ext>` |
+| 数据库记录 | `upload_files.path` = 相对路径，`url` = `/api/v1/files/<相对路径>` |
+| 命名规则 | 一级按上传者学号（便于按用户管理数据），二级按日期 |
+| 删除联动 | 彻底删除帖子 / 删除用户时，磁盘文件一并删除 |
 
 **上传限制（可在后台配置）**
 
@@ -230,6 +242,7 @@
 | GET | `/admin/dashboard/trend?days=7` | 近 N 天发帖 / 注册趋势 |
 | GET | `/admin/dashboard/module-stats` | 各模块帖子数量分布 |
 | GET | `/admin/dashboard/pending?limit=10` | 最近待审核帖子 |
+| GET | `/admin/dashboard/media` | 媒体存储用量：按用户列磁盘占用 + 孤儿文件清单 |
 
 ### 6.2 用户管理
 
@@ -239,6 +252,7 @@
 | GET | `/admin/users/{id}` | 详情 + 发帖统计 |
 | GET | `/admin/users/{id}/posts` | 发帖记录（含软删除） |
 | GET | `/admin/users/{id}/logs` | 该用户的登录日志与操作日志 |
+| GET | `/admin/users/{id}/media` | 该用户的媒体清单 + 磁盘占用（删除前确认用） |
 | POST | `/admin/users/{id}/ban` | 封禁：`{reason}` |
 | POST | `/admin/users/{id}/unban` | 解封 |
 | POST | `/admin/users/{id}/reset-password` | 重置密码：`{new_password}`，留空则重置为 `123456` |
@@ -246,8 +260,21 @@
 | POST | `/admin/users/{id}/remark` | 管理员备注 |
 | POST | `/admin/users` | 管理员创建账号（可指定角色） |
 | POST | `/admin/users/batch/ban` | 批量封禁：`{user_ids, reason}` |
+| DELETE | `/admin/users/{id}` | **彻底删除用户**（不可恢复）：`{confirm_student_id}` 二次确认；仅超级管理员。级联清理其帖子/评论/收藏/私信/通知/媒体记录，并**删除磁盘目录 `uploads/<学号>/`**；操作日志保留但置空 `user_id` |
 
-### 6.3 内容管理（跨全部模块）
+> 删除用户的详细影响范围见 [DATA.md](DATA.md) 第三节。
+
+### 6.3 评论管理
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/admin/comments` | 评论列表：`keyword` / `post_id` / `user_id` / `include_deleted` / 分页 |
+| GET | `/admin/comments/stats` | 评论概览（总数 / 可见 / 已删 / 评论最多的帖子） |
+| DELETE | `/admin/comments/{id}` | 删除评论（软删除）；`?purge=1` 彻底删除（含子回复） |
+
+> 评论的**发表**功能仍属 v1.2；删除能力在 v1.0 提前提供，便于管理员处理违规内容。
+
+### 6.4 内容管理（跨全部模块）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -262,7 +289,7 @@
 | DELETE | `/admin/posts/{id}` | 删除（软删除 → 回收站），并通知作者 |
 | GET | `/admin/posts/stats/summary` | 内容概览（各状态 / 各模块数量） |
 
-### 6.4 模块管理
+### 6.5 模块管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -273,7 +300,7 @@
 | POST | `/admin/modules/reorder` | 批量排序：`{items: [{id, sort_order}]}` |
 | DELETE | `/admin/modules/{id}` | 删除模块（内置模块禁止删除；有帖子时禁止删除） |
 
-### 6.5 回收站
+### 6.6 回收站
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -285,14 +312,14 @@
 | POST | `/admin/trash/cleanup` | 立即按保留条数清理：`{keep?}`（同时写入配置） |
 | GET | `/admin/trash/stats` | 回收站概览与保留策略 |
 
-### 6.6 举报处理
+### 6.7 举报处理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | GET | `/admin/reports` | 举报列表：`status` / `keyword` / 分页 |
 | POST | `/admin/reports/{id}/handle` | 处理：`{status: handled\|rejected, remark, action: none\|delete_post\|ban_user}` |
 
-### 6.7 日志管理
+### 6.8 日志管理
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
@@ -301,7 +328,7 @@
 | GET | `/admin/logs/errors?lines=200` | 异常日志（读取 `app/logs/error.log` 尾部） |
 | GET | `/admin/logs/summary` | 日志概览统计 |
 
-### 6.8 系统配置
+### 6.9 系统配置
 
 | 方法 | 路径 | 说明 |
 |---|---|---|

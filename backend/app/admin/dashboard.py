@@ -107,3 +107,37 @@ def pending_list():
         .all()
     )
     return success({'list': [item.to_dict() for item in rows], 'total': len(rows)})
+
+
+@bp.get('/dashboard/media')
+@admin_required
+def media_storage():
+    """媒体存储用量：按用户目录统计磁盘占用。
+
+    配合「数据按用户分目录存放」的设计，管理员可以在这里看清
+    每个用户占了多少空间，也便于发现异常占用。
+    """
+    from ..utils.cleanup import media_orphan_files
+    from ..utils.uploads import media_stats
+
+    stats = media_stats()
+    orphans = media_orphan_files()
+
+    # 把目录名（学号）关联到用户名，便于阅读
+    dir_names = [item['dir'] for item in stats['dirs']]
+    users = {
+        user.student_id: user.to_brief()
+        for user in User.query.filter(User.student_id.in_(dir_names)).all()
+    } if dir_names else {}
+    for item in stats['dirs']:
+        brief = users.get(item['dir'])
+        item['user'] = brief
+        item['display'] = brief['display_name'] if brief else item['dir']
+
+    return success({
+        'root_files': stats['files'],
+        'root_bytes': stats['bytes'],
+        'users': stats['dirs'],
+        'orphan_files': orphans[:50],
+        'orphan_count': len(orphans),
+    })

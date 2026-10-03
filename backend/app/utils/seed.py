@@ -111,8 +111,24 @@ def _clear_business_data():
 
 
 def run_seed(reset=False):
-    """执行数据生成。"""
+    """执行数据生成。
+
+    :param reset: True 时先清空业务数据再生成，结果确定、可重复执行。
+
+    非 reset 模式下若库里已有业务数据，直接跳过并返回说明——
+    否则重复执行会撞 favorites 等表的唯一约束（这是脚本不可重复执行的成因）。
+    """
     rnd = random.Random(RANDOM_SEED)
+
+    existing_posts = Post.query.count()
+    existing_users = User.query.count()
+    if not reset and (existing_posts > 0 or existing_users > 0):
+        return {
+            'skipped': True,
+            'reason': '库中已有业务数据，未重复生成（需要重建请加 --reset）',
+            'users': existing_users,
+            'posts': existing_posts,
+        }
 
     if reset:
         _clear_business_data()
@@ -201,8 +217,11 @@ def run_seed(reset=False):
                                    created_at=post.created_at + timedelta(hours=3)))
             post.comment_count = (post.comment_count or 0) + 1
     for post in posts[:5]:
-        favor = Favorite(user_id=rnd.choice(students).id, post_id=post.id)
-        db.session.add(favor)
+        # 防御：跳过已存在的 (user, post) 组合，避免 UNIQUE(user_id, post_id) 冲突
+        student = rnd.choice(students)
+        if Favorite.query.filter_by(user_id=student.id, post_id=post.id).first():
+            continue
+        db.session.add(Favorite(user_id=student.id, post_id=post.id))
         post.favorite_count = (post.favorite_count or 0) + 1
     db.session.add(Report(reporter_id=students[1].id, post_id=posts[1].id,
                           reason='虚假信息', detail='感觉是广告，请管理员核实', status=REPORT_PENDING))

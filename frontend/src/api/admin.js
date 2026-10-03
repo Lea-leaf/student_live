@@ -17,12 +17,26 @@ export const adminApi = {
     detail: (id) => request.get(API.admin.userDetail(id)),
     posts: (id, params) => request.get(API.admin.userPosts(id), { params }),
     logs: (id, params) => request.get(API.admin.userLogs(id), { params }),
+    /** 媒体文件清单与磁盘占用（删除用户前确认用） */
+    media: (id) => request.get(API.admin.userMedia(id)),
     ban: (id, data) => request.post(API.admin.userBan(id), data),
     unban: (id) => request.post(API.admin.userUnban(id)),
     resetPassword: (id, data) => request.post(API.admin.userResetPassword(id), data || {}),
     changeRole: (id, data) => request.post(API.admin.userRole(id), data),
     create: (data) => request.post(API.admin.users, data),
-    batchBan: (data) => request.post(API.admin.batchBan, data)
+    batchBan: (data) => request.post(API.admin.batchBan, data),
+    /** 彻底删除用户（需传 confirm_student_id 二次确认；仅超级管理员） */
+    remove: (id, data) => request.delete(API.admin.userDetail(id), { data })
+  },
+
+  // ---------------- 评论管理 ----------------
+  comments: {
+    list: (params) => request.get(API.admin.comments, { params }),
+    stats: () => request.get(API.admin.commentStats),
+    /** purge=1 时彻底删除（含子回复） */
+    remove: (id, purge) => request.delete(API.admin.commentDelete(id), {
+      params: purge ? { purge: 1 } : {}
+    })
   },
 
   // ---------------- 内容管理 ----------------

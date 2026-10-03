@@ -77,3 +77,19 @@ desktop.ini
 *.tmp
 *.bak
 _tmp/
+
+# ---------- pip 临时目录 ----------
+# 在项目目录（而非 %TEMP%）执行 pip 时，中断/卡死会留下这些空目录：
+#   pip-build-tracker-* pip-ephem-wheel-cache-* pip-install-* pip-metadata-* pip-unpack-*
+# 任何一层目录下都可能出现，故用 **/ 匹配。
+pip-*/
+**/pip-*/
+*.whl
+
+# ---------- 测试与临时产物 ----------
+**/pytest-of-*/
+.pytest_cache/
+**/.pytest_cache/
+.coverage
+htmlcov/
+

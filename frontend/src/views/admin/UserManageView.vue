@@ -2,6 +2,7 @@
 /**
  * 管理端 - 用户管理。
  * 需求：列表、搜索、详情、封禁/解封、重置密码、查看发帖记录。
+ * 额外：彻底删除用户（级联清理帖子/评论/媒体文件，需输入学号二次确认）。
  */
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -10,10 +11,12 @@ import { Search } from '@element-plus/icons-vue'
 
 import adminApi from '@/api/admin'
 import { useAppStore } from '@/stores/app'
+import { useUserStore } from '@/stores/user'
 import { statusTagType } from '@/utils'
 
 const router = useRouter()
 const appStore = useAppStore()
+const userStore = useUserStore()
 
 const loading = ref(false)
 const list = ref([])
@@ -122,6 +125,54 @@ async function batchBan() {
 function goDetail(row) {
   router.push({ name: 'admin-user-detail', params: { id: row.id } })
 }
+
+/**
+ * 彻底删除用户（不可恢复）。
+ * 后端要求提交 confirm_student_id 做二次确认，这里先给用户看清后果，再要求输入学号。
+ */
+async function removeUser(row) {
+  let media = null
+  try {
+    media = await adminApi.users.media(row.id)
+  } catch (error) {
+    // 拿不到媒体清单不阻塞删除流程
+  }
+
+  const mediaLine = media
+    ? `\n该用户有 ${media.db_record_count} 条媒体记录，磁盘占用 ${media.files_on_disk} 个文件 / ${(media.bytes_on_disk / 1024).toFixed(1)} KB，将一并删除。`
+    : ''
+
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `⚠️ 彻底删除不可恢复！\n\n将删除：该用户的全部帖子、评论、收藏、私信、通知，` +
+        `以及磁盘目录 uploads\\${row.student_id}\\ 下的所有文件。${mediaLine}\n\n` +
+        `请输入该用户的学号「${row.student_id}」以确认：`,
+      `删除用户 ${row.display_name}`,
+      {
+        inputPlaceholder: row.student_id,
+        inputValidator: (text) => (text && text.trim() === row.student_id
+          ? true
+          : '输入的学号与目标用户不一致'),
+        confirmButtonText: '确认彻底删除',
+        confirmButtonClass: 'el-button--danger',
+        type: 'error'
+      }
+    )
+
+    const data = await adminApi.users.remove(row.id, { confirm_student_id: value.trim() })
+    const totalFiles = (data.media_files || 0) + (data.leftover_files || 0)
+    ElMessageBox.alert(
+      `已删除用户 ${data.student_id}\n\n` +
+        `帖子 ${data.posts} 条｜评论 ${data.comments} 条｜收藏 ${data.favorites} 条\n` +
+        `媒体记录 ${data.media_rows} 条｜磁盘文件 ${totalFiles} 个`,
+      '删除完成',
+      { confirmButtonText: '知道了', type: 'success' }
+    )
+    load()
+  } catch (error) {
+    // 取消或接口报错
+  }
+}
 </script>
 
 <template>
@@ -214,6 +265,15 @@ function goDetail(row) {
             </el-button>
             <el-button v-else text type="success" size="small" @click="unbanUser(row)">解封</el-button>
             <el-button text type="warning" size="small" @click="resetPassword(row)">重置密码</el-button>
+            <el-button
+              v-if="userStore.user && userStore.user.id !== row.id"
+              text
+              type="danger"
+              size="small"
+              @click="removeUser(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>

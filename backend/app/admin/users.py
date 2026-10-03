@@ -339,4 +339,90 @@ def user_logs(user_id):
         return as_error(exc)
 
 
+@bp.get('/<int:user_id>/media')
+@admin_required
+def user_media(user_id):
+    """查看某用户的媒体文件清单（数据库记录 + 磁盘实际占用）。
+
+    删除用户前先用它确认「要删掉哪些东西」，也让「数据归属」可见。
+    """
+    try:
+        from ..models import UploadFile
+        from ..utils.uploads import user_upload_dir
+
+        user = _get_user_or_404(user_id)
+        rows = UploadFile.query.filter_by(user_id=user.id).order_by(UploadFile.id.desc()).all()
+        directory = user_upload_dir(user)
+        files_on_disk, bytes_on_disk = 0, 0
+        import os
+
+        if os.path.isdir(directory):
+            for dirpath, _dirnames, filenames in os.walk(directory):
+                for filename in filenames:
+                    files_on_disk += 1
+                    try:
+                        bytes_on_disk += os.path.getsize(os.path.join(dirpath, filename))
+                    except OSError:
+                        pass
+
+        return success({
+            'user': user.to_brief(),
+            'upload_dir': directory,
+            'db_records': [row.to_dict() for row in rows],
+            'db_record_count': len(rows),
+            'files_on_disk': files_on_disk,
+            'bytes_on_disk': bytes_on_disk,
+        })
+    except ValidationError as exc:
+        return as_error(exc)
+
+
+@bp.delete('/<int:user_id>')
+@super_admin_required
+def delete_user(user_id):
+    """**彻底删除用户**（不可恢复）。
+
+    删除范围（级联，确保不留下孤儿指针与孤儿文件）：
+        - 该用户发布的全部帖子，及其评论 / 收藏 / 媒体记录 / 举报引用解除
+        - 该用户发出的评论、收藏、举报、私信、通知、模块授权、上传记录
+        - 磁盘目录 `uploads/<学号>/` 整个删除
+        - 操作日志保留（审计需要），但把 user_id 置空
+
+    安全约束：
+        - 仅超级管理员可调用；
+        - 不能删除自己；
+        - 非超级管理员不能删除管理员账号；
+        - 请求体必须带 `confirm_student_id` 且与该用户学号完全一致（二次确认，防误删）。
+    """
+    try:
+        from ..utils.cleanup import purge_user
+
+        operator = current_user()
+        user = _get_user_or_404(user_id)
+
+        if user.id == operator.id:
+            raise ValidationError('不能删除自己的账号')
+        if user.is_admin and not operator.is_super_admin:
+            return error('只有超级管理员可以删除管理员账号', CODE_FORBIDDEN, http_status=403)
+
+        payload = get_json(required=False) or {}
+        confirm = (payload.get('confirm_student_id') or '').strip()
+        if confirm != user.student_id:
+            raise ValidationError(
+                f'二次确认失败：请在 confirm_student_id 中填写该用户的学号「{user.student_id}」'
+            )
+
+        student_id = user.student_id
+        stats = purge_user(user, delete_files=True)
+
+        # 用户已删，日志里只留快照
+        write_operation_log('delete_user', module='users', target_type='user', target_id=user_id,
+                            detail=stats)
+        total_files = stats['media_files'] + stats['leftover_files']
+        return success(stats, msg=f'已彻底删除用户 {student_id}（含 {stats["posts"]} 条帖子、'
+                                  f'{stats["media_rows"]} 条媒体记录、{total_files} 个磁盘文件）')
+    except ValidationError as exc:
+        return as_error(exc)
+
+
 __all__ = ['bp']

@@ -77,19 +77,21 @@ def restore_post(post_id):
 def purge_post(post_id):
     """彻底删除（不可恢复）。
 
-    同时清理该帖子关联的媒体文件记录，避免留下孤儿文件。
+    通过 `utils.cleanup.purge_post()` 级联清理，确保不留下孤儿指针与孤儿文件：
+        媒体记录 + 磁盘文件 + 该帖的评论 + 收藏，举报记录保留但解除引用。
     """
     try:
+        from ..utils.cleanup import purge_post as purge_post_service
+
         post = Post.query.filter_by(id=post_id, is_deleted=True).first()
         if post is None:
             raise ValidationError('回收站中没有该帖子', 4001)
         title, post_type = post.title, post.type
-        UploadFile.query.filter_by(post_id=post.id).delete()
-        db.session.delete(post)
-        db.session.commit()
+        stats = purge_post_service(post, delete_files=True)
         write_operation_log('purge', module=post_type, target_type='post', target_id=post_id,
-                            detail={'title': title})
-        return success(msg='已彻底删除')
+                            detail={'title': title, **stats})
+        return success(stats, msg=f'已彻底删除（同时清理 {stats["media_files"]} 个磁盘文件、'
+                                  f'{stats["comments"]} 条评论）')
     except ValidationError as exc:
         return as_error(exc)
 
@@ -120,23 +122,30 @@ def batch_restore():
 @bp.post('/batch/purge')
 @admin_required
 def batch_purge():
-    """批量彻底删除：{"post_ids": [1,2]}"""
+    """批量彻底删除：{"post_ids": [1,2]}
+
+    逐条走 `purge_post()` 级联清理（媒体文件 + 评论 + 收藏），不留下孤儿数据。
+    """
     try:
+        from ..utils.cleanup import purge_post as purge_post_service
+
         payload = get_json()
         ids = parse_int_list(payload.get('post_ids'), '帖子ID')
         if not ids:
             raise ValidationError('请选择要删除的帖子')
         affected = 0
+        files = 0
         for pid in ids:
             post = Post.query.filter_by(id=pid, is_deleted=True).first()
             if post is None:
                 continue
-            UploadFile.query.filter_by(post_id=post.id).delete()
-            db.session.delete(post)
+            stats = purge_post_service(post, delete_files=True)
+            files += stats['media_files']
             affected += 1
-        db.session.commit()
-        write_operation_log('batch_purge', module='trash', detail={'ids': ids, 'affected': affected})
-        return success({'affected': affected}, msg=f'已彻底删除 {affected} 条')
+        write_operation_log('batch_purge', module='trash',
+                            detail={'ids': ids, 'affected': affected, 'files': files})
+        return success({'affected': affected, 'media_files': files},
+                       msg=f'已彻底删除 {affected} 条（清理 {files} 个磁盘文件）')
     except ValidationError as exc:
         return as_error(exc)
 
