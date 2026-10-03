@@ -128,6 +128,8 @@ class Message(BaseModel):
     def to_dict(self, exclude=None, extra=None):
         data = super().to_dict(exclude=exclude, extra=extra)
         data['media'] = self.media_list()
+        data['sender'] = self.sender.to_brief() if self.sender else None
+        data['receiver'] = self.receiver.to_brief() if self.receiver else None
         return data
 
     @staticmethod

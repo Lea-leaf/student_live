@@ -146,6 +146,17 @@ def post_detail(post_id):
         data['can_audit'] = bool(user and user.is_admin and post.audit_status == 'pending')
         # 联系方式公开可见（需求明确要求），此处显式标注便于前端提示风险
         data['contact_public'] = True
+        # 点赞 / 收藏与作者标记：详情页据此直接渲染按钮状态，少发两个 check 请求
+        data['liked'] = False
+        data['favorited'] = False
+        data['is_self'] = bool(user and post.user_id == user.id)
+        if user:
+            from ...models import Favorite, PostLike
+
+            data['liked'] = PostLike.query.filter_by(
+                user_id=user.id, post_id=post.id).first() is not None
+            data['favorited'] = Favorite.query.filter_by(
+                user_id=user.id, post_id=post.id).first() is not None
         return success(data)
     except ValidationError as exc:
         return as_error(exc)

@@ -75,6 +75,8 @@ def main():
         return 1
     admin_token = admin_login['access_token']
     student_token = student_login['access_token']
+    admin_uid = (admin_login.get('user') or {}).get('id')
+    student_uid = (student_login.get('user') or {}).get('id')
     call('GET', '/auth/me', token=student_token)
     call('GET', '/auth/me', expect_code=2001)
     call('GET', '/auth/security-notice')
@@ -126,12 +128,37 @@ def main():
         call('DELETE', f'/lost_found/posts/{new_id}', token=student_token)
         call('POST', f'/admin/trash/{new_id}/restore', token=admin_token)
 
-    print('\n[6] 互动与占位模块')
+    print('\n[6] 互动：评论 / 点赞 / 私信 / 通知')
     call('GET', '/notifications', token=student_token)
     call('GET', '/notifications/unread-count', token=student_token)
     call('GET', '/favorites', token=student_token)
-    call('POST', f'/comments/posts/{new_id}/comments' if new_id else '/comments/posts/1/comments',
-         {'content': 'x'}, token=student_token, expect_code=7001)
+
+    comment = None
+    if new_id:
+        comment = call('POST', f'/comments/posts/{new_id}/comments',
+                       {'content': '冒烟测试：这是一条评论'}, token=student_token)
+    if comment:
+        comment_id = comment['id']
+        call('POST', f'/comments/posts/{new_id}/comments',
+             {'content': '冒烟测试：楼中楼回复', 'parent_id': comment_id}, token=admin_token)
+        call('GET', f'/comments/posts/{new_id}/comments')
+        call('POST', f'/likes/comments/{comment_id}', token=admin_token)
+        call('GET', f'/likes/comments/{comment_id}', token=admin_token)
+
+    if new_id:
+        call('POST', f'/likes/posts/{new_id}', token=admin_token)
+        call('GET', f'/likes/posts/{new_id}', token=admin_token)
+
+    if admin_uid and student_uid:
+        message = call('POST', f'/messages/with/{student_uid}',
+                       {'content': '冒烟测试：一条私信'}, token=admin_token)
+        call('GET', '/messages/unread-count', token=student_token)
+        call('GET', '/messages/conversations', token=student_token)
+        call('GET', f'/messages/with/{admin_uid}', token=student_token)
+        if message:
+            call('POST', f'/messages/read/{message["id"]}', token=student_token)
+
+    call('GET', '/notifications', token=student_token)
 
     print(f'\n===== 结果：通过 {passed}，失败 {failed} =====')
     return 0 if failed == 0 else 1

@@ -211,6 +211,10 @@
 
 ### 5.3 通知 `/api/v1/notifications`（v1.0 可用）
 
+`type` 取值：`audit` 审核 / `comment` 评论回复 / `message` 私信 /
+`like` 点赞 / `mention` 被 @ / `system` 系统公告。
+v1.2 起评论、回复、@、点赞、私信都会写入通知中心。
+
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | GET | `/notifications` | 登录 | 列表：`is_read=0/1`、`type`、分页 |
@@ -219,16 +223,63 @@
 | POST | `/notifications/read-all` | 登录 | 全部已读 |
 | DELETE | `/notifications/{id}` | 登录 | 删除通知 |
 
-### 5.4 评论 / 私信（v1.2 开放，接口已固定）
+### 5.4 评论 `/api/v1/comments`（v1.2 可用）
 
-| 方法 | 路径 | 当前返回 |
-|---|---|---|
-| GET | `/comments/posts/{id}/comments` | `code=0`，空列表 |
-| POST | `/comments/posts/{id}/comments` | `code=7001`，`501` |
-| DELETE | `/comments/{id}` | `code=7001`，`501` |
-| GET | `/messages/conversations` | `code=0`，空列表 |
-| GET | `/messages/with/{user_id}` | `code=0`，空列表 |
-| POST | `/messages/with/{user_id}` | `code=7002`，`501` |
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/comments/posts/{id}/comments` | 可选登录 | 顶级评论分页；每条评论带 `replies` 整棵楼中楼子树；返回 `liked`、`total_all` |
+| POST | `/comments/posts/{id}/comments` | 登录 | 发表评论 / 回复，支持 JSON 与 `multipart/form-data`（字段 `files`） |
+| DELETE | `/comments/{id}` | 登录 | 用户撤回自己 5 分钟内的评论（物理删除）；管理员删除任意评论（物理删除，含子回复、点赞、媒体、互动通知） |
+
+POST 请求体：
+
+```json
+{
+  "content": "同意楼上，我也在图书馆见过",
+  "parent_id": 12,
+  "reply_to_user_id": 8,
+  "media": [
+    { "id": 3, "url": "/api/v1/files/20210001/20261003/a.png",
+      "path": "20210001/20261003/a.png", "name": "现场.png",
+      "type": "image", "size": 10240, "mime": "image/png" }
+  ]
+}
+```
+
+- `parent_id` 留空表示顶级评论；回复时后端自动计算 `root_id`，并将 `reply_to_user_id` 默认设为父评论作者；
+- `media` 建议先调 `POST /common/upload` 上传拿到结构；也支持 multipart 直接带 `files`；
+- 评论通知：帖子作者、被回复者、正文中 `@昵称/学号` 的用户都会收到对应通知，自己操作自己不通知；
+- 删除规则（v1.2 起）：用户不再有软删除，只能撤回自己 5 分钟内的评论（物理删除）；
+  管理员删除任意评论也是物理删除，并在操作日志里保留评论内容等数据库信息快照。
+
+### 5.5 点赞 `/api/v1/likes`（v1.2 可用）
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| POST | `/likes/posts/{id}` | 登录 | 帖子点赞 / 取消（幂等切换），返回 `{liked, like_count}` |
+| GET | `/likes/posts/{id}` | 登录 | 查询当前用户是否已点赞该帖子 |
+| POST | `/likes/comments/{id}` | 登录 | 评论点赞 / 取消，返回 `{liked, like_count}` |
+| GET | `/likes/comments/{id}` | 登录 | 查询当前用户是否已点赞该评论 |
+
+> 点赞与收藏是独立功能：`posts.like_count` / `comments.like_count` 只随点赞变化，
+> `posts.favorite_count` 只随收藏变化。点赞成功会通知内容作者。
+
+### 5.6 私信 `/api/v1/messages`（v1.2 可用）
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/messages/conversations` | 登录 | 会话列表（对方信息、最后一条消息、会话未读数） |
+| GET | `/messages/with/{user_id}` | 登录 | 与某人的消息记录（分页）；**拉取即把对方发来的未读标记为已读**，返回 `user`、`read_count` |
+| POST | `/messages/with/{user_id}` | 登录 | 发送私信；`content` / `media` / `msg_type` / `post_id`，支持 multipart `files` |
+| POST | `/messages/{message_id}/recall` | 登录 | 撤回自己发送的消息：**仅发送方、5 分钟内、数据库物理删除**，媒体与通知一并清理 |
+| DELETE | `/messages/{message_id}` | 登录 | 普通删除：单侧隐藏（`sender_deleted` / `receiver_deleted`）；双方都删除后自动物理清理 |
+| POST | `/messages/read/{message_id}` | 登录 | 单条已读回执（仅接收方） |
+| POST | `/messages/read-all` | 登录 | 全部已读 |
+| GET | `/messages/unread-count` | 登录 | 未读红点：`{unread, unread_conversations}` |
+
+> 发送成功后接收方会收到 `message` 类型站内通知；发送方在会话里能看到每条消息的「已读 / 未读」。
+> 实时化预留：表结构已按 `conversation_key` 设计，后续可平滑升级 WebSocket。
+
 
 ---
 
@@ -270,7 +321,7 @@
 |---|---|---|
 | GET | `/admin/comments` | 评论列表：`keyword` / `post_id` / `user_id` / `include_deleted` / 分页 |
 | GET | `/admin/comments/stats` | 评论概览（总数 / 可见 / 已删 / 评论最多的帖子） |
-| DELETE | `/admin/comments/{id}` | 删除评论（软删除）；`?purge=1` 彻底删除（含子回复） |
+| DELETE | `/admin/comments/{id}` | 删除评论（数据库物理删除，含子回复、点赞、媒体、互动通知；兼容 `?purge=1`） |
 
 > 评论的**发表**功能仍属 v1.2；删除能力在 v1.0 提前提供，便于管理员处理违规内容。
 
@@ -362,10 +413,11 @@
 | 4004 | 非法状态流转 |
 | 5001 | 举报已处理 |
 | 5002 | 通知不存在 |
+| 5003 | 超过 5 分钟不能撤回（评论 / 私信共用） |
 | 6001 | 不支持的文件类型 |
 | 6002 | 文件超出大小限制 |
 | 6003 | 文件上传失败 |
-| 7001 / 7002 | 功能待 v1.2 开放（评论 / 私信） |
+| 7001 / 7002 | 历史占位码：v1.2 已实现，接口不再返回 |
 | 9001 | 服务器内部错误 |
 | 9002 | 数据库操作失败 |
 
@@ -381,9 +433,10 @@
 | `register_captcha_enabled` | `1` | 注册是否需要验证码 |
 | `recycle_retention_count` | `10` | 回收站保留条数 |
 | `recycle_retention_mode` | `force` | 超量处理方式（彻底删除 / 仅保留） |
-| `upload_allowed_ext` | `jpg,jpeg,png,gif,webp,mp4,mov` | 允许上传的后缀 |
+| `upload_allowed_ext` | `jpg,jpeg,png,gif,webp,mp4,mov,mp3,wav,m4a,ogg,webm` | 允许上传的后缀 |
 | `upload_max_mb_image` | `10` | 图片大小上限（MB） |
 | `upload_max_mb_video` | `50` | 视频大小上限（MB） |
+| `upload_max_mb_audio` | `5` | 语音大小上限（MB，评论 / 私信录音） |
 | `page_default_size` | `10` | 默认每页条数 |
 | `page_max_size` | `100` | 每页条数上限 |
 | `guest_can_list` | `1` | 游客可浏览列表 |
@@ -398,7 +451,8 @@
 | 发布帖子 | ❌ | ✅ | ✅（免审核） |
 | 编辑 / 删除自己的帖子 | ❌ | ✅ | ✅ |
 | 标记帖子状态 | ❌ | ✅（自己的） | ✅（全部） |
-| 评论 / 私信 | ❌ | v1.2 | v1.2 |
+| 评论 / 点赞 | ❌ | ✅ | ✅ |
+| 私信 / 已读回执 | ❌ | ✅（本人会话） | ✅（本人会话） |
 | 收藏 / 举报 | ❌ | ✅ | ✅ |
 | 查看所有用户信息 | ❌ | ❌ | ✅ |
 | 封禁 / 解封用户 | ❌ | ❌ | ✅ |

@@ -81,8 +81,34 @@ DEFAULT_MODULE_CODE = MODULE_LOST_FOUND
 NOTIFY_AUDIT = 'audit'
 NOTIFY_COMMENT = 'comment'
 NOTIFY_MESSAGE = 'message'
+NOTIFY_LIKE = 'like'
+NOTIFY_MENTION = 'mention'
 NOTIFY_SYSTEM = 'system'
-NOTIFY_TYPES = (NOTIFY_AUDIT, NOTIFY_COMMENT, NOTIFY_MESSAGE, NOTIFY_SYSTEM)
+NOTIFY_TYPES = (NOTIFY_AUDIT, NOTIFY_COMMENT, NOTIFY_MESSAGE, NOTIFY_LIKE,
+                NOTIFY_MENTION, NOTIFY_SYSTEM)
+NOTIFY_TYPE_LABELS = {
+    NOTIFY_AUDIT: '审核',
+    NOTIFY_COMMENT: '评论',
+    NOTIFY_MESSAGE: '私信',
+    NOTIFY_LIKE: '点赞',
+    NOTIFY_MENTION: '提到我',
+    NOTIFY_SYSTEM: '系统',
+}
+
+# ---------------------------------------------------------------------------
+# 私信消息类型
+# ---------------------------------------------------------------------------
+MESSAGE_TEXT = 'text'
+MESSAGE_IMAGE = 'image'
+MESSAGE_VOICE = 'voice'
+MESSAGE_VIDEO = 'video'
+MESSAGE_TYPES = (MESSAGE_TEXT, MESSAGE_IMAGE, MESSAGE_VOICE, MESSAGE_VIDEO)
+MESSAGE_TYPE_LABELS = {
+    MESSAGE_TEXT: '文字',
+    MESSAGE_IMAGE: '图片',
+    MESSAGE_VOICE: '语音',
+    MESSAGE_VIDEO: '视频',
+}
 
 # ---------------------------------------------------------------------------
 # 举报 / 日志

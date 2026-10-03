@@ -19,7 +19,8 @@ export const useAppStore = defineStore('app', {
       guest_can_list: true,
       guest_can_detail: false,
       upload_max_mb_image: '10',
-      upload_max_mb_video: '50'
+      upload_max_mb_video: '50',
+      upload_max_mb_audio: '5'
     },
     /** 启用中的模块 */
     modules: [],

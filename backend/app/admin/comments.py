@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """管理端 - 评论管理。
 
-v1.0 补齐：管理员需要能看到并删除库里的评论（含种子数据与历史评论），
-否则违规评论只能靠直接改数据库，这在实际使用中不可接受。
-**发表评论**仍属 v1.2，不在此模块提供。
+管理员需要能看到并删除库里的评论（含种子数据与历史评论）。
+v1.2 起评论区不再对用户提供软删除：管理员删除 = 数据库物理删除，
+并同步清理子回复、点赞、媒体文件与相关互动通知；操作日志保留评论内容快照。
 
 接口一览（前缀 /api/v1/admin/comments）：
     GET    /              评论列表（按帖子/用户/关键词筛选）
     GET    /stats         评论概览
-    DELETE /{id}          删除评论（软删除；?purge=1 彻底删除）
+    DELETE /{id}          删除评论（物理删除，含整棵子回复；兼容保留 ?purge=1 参数）
 """
 
 from flask import Blueprint, request
@@ -87,31 +87,32 @@ def comment_stats():
 @bp.delete('/<int:comment_id>')
 @admin_required
 def delete_comment(comment_id):
-    """删除评论。默认软删除，`?purge=1` 彻底删除（含子回复）。"""
+    """管理员删除评论：数据库物理删除（含子回复、点赞、媒体与相关通知）。
+
+    兼容旧的 `?purge=1` 参数，但无论是否传参都是物理删除。
+    删除前把评论内容、作者、帖子等数据库信息写进操作日志，便于审计。
+    """
     try:
         comment = Comment.query.get(comment_id)
         if comment is None:
             raise ValidationError('评论不存在', 1002)
 
-        post_id = comment.post_id
+        from ..utils.cleanup import purge_comment
 
-        if request.args.get('purge') in ('1', 'true', 'yes'):
-            from ..utils.cleanup import purge_comment
-
-            stats = purge_comment(comment)
-            write_operation_log('purge_comment', module='comments', target_type='comment',
-                                target_id=comment_id, detail=stats)
-            return success(stats, msg='评论已彻底删除')
-
-        comment.is_deleted = True
-        db.session.commit()
-        post = Post.query.get(post_id)
-        if post:
-            post.comment_count = Comment.query.filter_by(post_id=post_id, is_deleted=False).count()
-            db.session.commit()
+        detail = {
+            'content': (comment.content or '')[:200],
+            'post_id': comment.post_id,
+            'user_id': comment.user_id,
+            'parent_id': comment.parent_id,
+            'like_count': comment.like_count,
+            'reply_count': comment.reply_count,
+            'by_admin': True,
+        }
+        stats = purge_comment(comment)
+        detail.update(stats)
         write_operation_log('delete_comment', module='comments', target_type='comment',
-                            target_id=comment_id)
-        return success({'comment_id': comment_id}, msg='评论已删除')
+                            target_id=comment_id, detail=detail)
+        return success(stats, msg='评论已删除')
     except ValidationError as exc:
         return as_error(exc)
 

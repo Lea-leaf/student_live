@@ -8,10 +8,11 @@
  */
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Bell, Plus, School } from '@element-plus/icons-vue'
+import { Bell, ChatDotRound, Plus, School } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 import { useAppStore } from '@/stores/app'
+import { useMessageStore } from '@/stores/message'
 import { useNotificationStore } from '@/stores/notification'
 import { useUserStore } from '@/stores/user'
 import { acknowledgeNotice, isNoticeAcknowledged } from '@/utils'
@@ -19,6 +20,7 @@ import { acknowledgeNotice, isNoticeAcknowledged } from '@/utils'
 const appStore = useAppStore()
 const userStore = useUserStore()
 const notificationStore = useNotificationStore()
+const messageStore = useMessageStore()
 const router = useRouter()
 const route = useRoute()
 
@@ -34,12 +36,14 @@ onMounted(async () => {
   // 登录用户：轮询未读通知 + 首次弹出安全公告
   if (userStore.isLogin) {
     notificationStore.startPolling()
+    messageStore.startPolling()
     maybeShowNotice()
   }
 })
 
 onUnmounted(() => {
   notificationStore.stopPolling()
+  messageStore.stopPolling()
 })
 
 /** 未确认过安全公告则弹出 */
@@ -87,6 +91,7 @@ async function handleCommand(command) {
   if (command === 'logout') {
     await userStore.logout()
     notificationStore.stopPolling()
+    messageStore.stopPolling()
     ElMessage.success('已退出登录')
     router.push({ name: 'home' })
     return
@@ -131,6 +136,14 @@ const noticeText = computed(() => appStore.config.security_notice_text || '')
 
           <template v-if="userStore.isLogin">
             <el-badge
+              :value="messageStore.unread"
+              :hidden="!messageStore.unread"
+              class="user-header__badge"
+            >
+              <el-button :icon="ChatDotRound" circle @click="router.push({ name: 'messages' })" />
+            </el-badge>
+
+            <el-badge
               :value="notificationStore.unread"
               :hidden="!notificationStore.unread"
               class="user-header__badge"
@@ -150,6 +163,7 @@ const noticeText = computed(() => appStore.config.security_notice_text || '')
                   <el-dropdown-item command="profile">个人中心</el-dropdown-item>
                   <el-dropdown-item command="my-posts">我的发布</el-dropdown-item>
                   <el-dropdown-item command="my-favorites">我的收藏</el-dropdown-item>
+                  <el-dropdown-item command="messages">我的私信</el-dropdown-item>
                   <el-dropdown-item v-if="userStore.isAdmin" command="admin-dashboard" divided>
                     管理后台
                   </el-dropdown-item>

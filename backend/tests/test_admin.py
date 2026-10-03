@@ -269,9 +269,15 @@ def test_favorites(client, student_token, sample_post):
     assert toggled['data']['favorited'] is False
 
 
-def test_unimplemented_module_returns_clear_error(client, student_token, sample_post):
-    """v1.2 才实现的模块：接口存在且返回明确的「待开放」错误码。"""
+def test_comment_endpoint_now_available(client, admin_token, student_token, sample_post):
+    """v1.2 已开放评论：接口返回成功，且管理员评论列表能看到。"""
     response = client.post(f'/api/v1/comments/posts/{sample_post}/comments',
-                           json={'content': 'hi'}, headers=auth_header(student_token))
-    assert response.status_code == 501
-    assert response.get_json()['code'] == 7001
+                           json={'content': '管理员视角可见的评论'},
+                           headers=auth_header(student_token))
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body['code'] == 0, body
+
+    listing = client.get('/api/v1/admin/comments', headers=auth_header(admin_token)).get_json()
+    assert listing['code'] == 0
+    assert any(item['content'] == '管理员视角可见的评论' for item in listing['data']['list'])

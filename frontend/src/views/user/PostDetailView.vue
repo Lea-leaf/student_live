@@ -12,7 +12,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, Location, Star, StarFilled, Timer, View, Warning } from '@element-plus/icons-vue'
 
-import { favoriteApi, reportApi } from '@/api/interaction'
+import { favoriteApi, likeApi, reportApi } from '@/api/interaction'
+import CommentSection from '@/components/CommentSection.vue'
 import lostFoundApi from '@/api/lostFound'
 import { useAppStore } from '@/stores/app'
 import { useUserStore } from '@/stores/user'
@@ -26,8 +27,10 @@ const userStore = useUserStore()
 const loading = ref(true)
 const post = ref(null)
 const favorited = ref(false)
+const liked = ref(false)
 const loadError = ref('')
 const submitting = ref(false)
+const liking = ref(false)
 
 const postId = computed(() => Number(route.params.id))
 
@@ -51,7 +54,10 @@ async function load() {
   loadError.value = ''
   try {
     post.value = await lostFoundApi.detail(postId.value)
-    if (userStore.isLogin) {
+    // 详情接口已带 liked / favorited（v1.2 起），省掉两个单独的 check 请求
+    favorited.value = !!post.value.favorited
+    liked.value = !!post.value.liked
+    if (userStore.isLogin && typeof post.value.liked === 'undefined') {
       try {
         const check = await favoriteApi.check(postId.value)
         favorited.value = !!check.favorited
@@ -95,10 +101,43 @@ async function toggleFavorite() {
   try {
     const data = await favoriteApi.toggle(postId.value)
     favorited.value = data.favorited
+    if (post.value) post.value.favorite_count = data.favorite_count
     ElMessage.success(data.favorited ? '已收藏' : '已取消收藏')
   } catch (error) {
     // 拦截器已提示
   }
+}
+
+async function toggleLike() {
+  if (!userStore.isLogin) {
+    ElMessage.warning('登录后才能点赞')
+    return
+  }
+  liking.value = true
+  try {
+    const data = await likeApi.togglePost(postId.value)
+    liked.value = data.liked
+    if (post.value) post.value.like_count = data.like_count
+  } catch (error) {
+    // 拦截器已提示
+  } finally {
+    liking.value = false
+  }
+}
+
+/** 评论区数量变化时同步帖子详情与列表卡片上的计数 */
+function onCommentsChanged(count) {
+  if (post.value) post.value.comment_count = count
+}
+
+/** 从详情页发起私信（自己不能给自己发） */
+function goMessageAuthor() {
+  if (!userStore.isLogin) {
+    ElMessage.warning('登录后才能私信')
+    return
+  }
+  if (!post.value?.author?.id || post.value.author.id === userStore.user?.id) return
+  router.push({ name: 'messages', query: { user: post.value.author.id } })
 }
 
 async function removePost() {
@@ -188,6 +227,7 @@ function handleCommand(command) {
           <span><el-icon><Location /></el-icon> {{ post.location || '未填写地点' }}</span>
           <span><el-icon><Timer /></el-icon> {{ post.happened_at ? formatTime(post.happened_at) : '未填写时间' }}</span>
           <span><el-icon><View /></el-icon> {{ post.view_count || 0 }} 次浏览</span>
+          <span><el-icon><ChatDotRound /></el-icon> {{ post.comment_count || 0 }} 条评论</span>
           <span>发布于 {{ formatTime(post.created_at) }}</span>
         </div>
 
@@ -230,6 +270,16 @@ function handleCommand(command) {
             <div>{{ post.author?.display_name || '匿名同学' }}</div>
             <div class="slp-text-sub">学号 {{ post.author?.student_id || '-' }}</div>
           </div>
+          <div style="flex: 1"></div>
+          <el-button
+            v-if="userStore.isLogin && post.author?.id !== userStore.user?.id"
+            type="primary"
+            plain
+            :icon="ChatDotRound"
+            @click="goMessageAuthor"
+          >
+            私信TA
+          </el-button>
         </div>
         <el-alert
           v-if="post.audit_status === 'rejected'"
@@ -243,8 +293,16 @@ function handleCommand(command) {
       <!-- 操作区 -->
       <div class="slp-card">
         <div class="slp-toolbar">
+          <el-button
+            :type="liked ? 'primary' : ''"
+            :icon="liked ? StarFilled : Star"
+            :loading="liking"
+            @click="toggleLike"
+          >
+            {{ liked ? '已点赞' : '点赞' }} {{ post.like_count || 0 }}
+          </el-button>
           <el-button :icon="favorited ? StarFilled : Star" @click="toggleFavorite">
-            {{ favorited ? '已收藏' : '收藏' }}
+            {{ favorited ? '已收藏' : '收藏' }} {{ post.favorite_count || 0 }}
           </el-button>
           <el-button :icon="Warning" @click="reportPost">举报</el-button>
 
@@ -281,6 +339,13 @@ function handleCommand(command) {
           <el-button text @click="router.push({ name: 'post-list' })">返回列表</el-button>
         </div>
       </div>
+
+      <!-- 评论区：发表 / 楼中楼 / 图片语音 / 点赞 -->
+      <CommentSection
+        :post-id="postId"
+        :author-id="post.user_id"
+        @count-change="onCommentsChanged"
+      />
     </template>
   </div>
 </template>

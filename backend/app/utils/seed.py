@@ -15,12 +15,15 @@ from ..extensions import db
 from ..models import (
     AdminModuleAccess,
     Comment,
+    CommentLike,
     Favorite,
     LoginLog,
+    Message,
     Module,
     Notification,
     OperationLog,
     Post,
+    PostLike,
     Report,
     SystemConfig,
     UploadFile,
@@ -104,8 +107,9 @@ def _users():
 
 def _clear_business_data():
     """清空业务数据（保留表结构）。"""
-    for model in (Favorite, Comment, Report, Notification, AdminModuleAccess,
-                  UploadFile, OperationLog, LoginLog, Post, User, Module, SystemConfig):
+    for model in (Message, PostLike, CommentLike, Favorite, Comment, Report,
+                  Notification, AdminModuleAccess, UploadFile, OperationLog,
+                  LoginLog, Post, User, Module, SystemConfig):
         model.query.delete()
     db.session.commit()
 

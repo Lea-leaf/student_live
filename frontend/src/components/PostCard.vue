@@ -4,7 +4,7 @@
  * 需求 6.2 的状态可见性规则由后端判定，这里只负责展示与「详情可点」的视觉反馈。
  */
 import { computed } from 'vue'
-import { Location, Timer, View } from '@element-plus/icons-vue'
+import { ChatDotRound, Location, Star, Timer, View } from '@element-plus/icons-vue'
 
 import { fromNow, statusTagType } from '@/utils'
 
@@ -60,6 +60,12 @@ function onClick() {
           </span>
           <span>
             <el-icon><View /></el-icon> {{ post.view_count || 0 }}
+          </span>
+          <span>
+            <el-icon><ChatDotRound /></el-icon> {{ post.comment_count || 0 }}
+          </span>
+          <span>
+            <el-icon><Star /></el-icon> {{ post.like_count || 0 }}
           </span>
           <span v-if="post.author">{{ post.author.display_name }}</span>
           <span>{{ fromNow(post.created_at) }}</span>

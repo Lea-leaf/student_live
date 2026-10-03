@@ -65,10 +65,24 @@ export const API = {
   },
   comments: {
     list: (postId) => `/comments/posts/${postId}/comments`,
-    create: (postId) => `/comments/posts/${postId}/comments`
+    create: (postId) => `/comments/posts/${postId}/comments`,
+    remove: (id) => `/comments/${id}`
+  },
+  likes: {
+    post: (postId) => `/likes/posts/${postId}`,
+    postState: (postId) => `/likes/posts/${postId}`,
+    comment: (commentId) => `/likes/comments/${commentId}`,
+    commentState: (commentId) => `/likes/comments/${commentId}`
   },
   messages: {
-    conversations: `/messages/conversations`
+    conversations: `/messages/conversations`,
+    withUser: (userId) => `/messages/with/${userId}`,
+    send: (userId) => `/messages/with/${userId}`,
+    recall: (messageId) => `/messages/${messageId}/recall`,
+    remove: (messageId) => `/messages/${messageId}`,
+    read: (messageId) => `/messages/read/${messageId}`,
+    readAll: `/messages/read-all`,
+    unreadCount: `/messages/unread-count`
   },
   // ---- 管理端 ----
   admin: {

@@ -47,9 +47,11 @@ def upload_root(app, tmp_path):
 
 
 def _upload(client, token, filename, content, mime):
+    # 三元组把 mime 一起交给 Werkzeug；否则 .webm 会被它先入为主地猜成 video/webm，
+    # 无法验证「audio/webm 录音靠 MIME 识别」这条规则。
     return client.post(
         '/api/v1/common/upload',
-        data={'files': (io.BytesIO(content), filename)},
+        data={'files': (io.BytesIO(content), filename, mime)},
         headers=auth_header(token),
         content_type='multipart/form-data',
     )
@@ -199,3 +201,22 @@ def test_post_with_all_media_types(client, app, student_token, upload_root):
         assert types == ['image', 'video', 'audio'], f'类型顺序错误：{types}'
         for item in detail['media']:
             assert client.get(item['url']).status_code == 200, f'{item["url"]} 取不回'
+
+
+# ---------------------------------------------------------------------------
+# webm 歧义：浏览器录音默认 audio/webm，必须靠 MIME 区分，不能当成视频
+# ---------------------------------------------------------------------------
+def test_upload_audio_webm_by_mime(client, student_token, upload_root):
+    """audio/webm 录音应识别为语音（webm 同时出现在视频/音频后缀白名单里）。"""
+    body = _upload(client, student_token, 'voice.webm', b'fake-webm-audio',
+                   'audio/webm').get_json()
+    assert body['code'] == 0, body
+    assert body['data']['media'][0]['type'] == 'audio', body
+
+
+def test_upload_video_webm_by_mime(client, student_token, upload_root):
+    """video/webm 仍然识别为视频。"""
+    body = _upload(client, student_token, 'video.webm', MP4_MIN,
+                   'video/webm').get_json()
+    assert body['code'] == 0, body
+    assert body['data']['media'][0]['type'] == 'video', body

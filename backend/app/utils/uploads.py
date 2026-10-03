@@ -59,19 +59,25 @@ def allowed_file(filename):
     return ext in current_app.config.get('ALLOWED_EXTENSIONS', set())
 
 
-def media_type_of(ext):
-    """按后缀判断媒体类型：image / video / audio。
+def media_type_of(ext, mime=None):
+    """判断媒体类型：image / video / audio。
 
-    ⚠️ 早期实现是「是 video 就 video，否则一律 image」，
-    导致 mp3 被当成图片、并且套用了图片的大小限制。
-    现在显式判断 audio，未知后缀才回落到 image。
+    后缀优先，但 **mime 优先于后缀中的歧义项**：
+    `webm` 既可能是视频也可能是语音（浏览器录音默认 audio/webm），
+    单看后缀无法区分，因此 mime 明确是 audio/* 时按语音处理；
+    反之 video/webm 仍是视频。
     """
     ext = (ext or '').lower()
+    mime = (mime or '').lower()
+    if mime.startswith('audio/'):
+        return 'audio'
+    if mime.startswith('video/'):
+        return 'video'
+    if mime.startswith('image/'):
+        return 'image'
     if ext in current_app.config.get('VIDEO_EXTENSIONS', set()):
         return 'video'
     if ext in current_app.config.get('AUDIO_EXTENSIONS', set()):
-        # 注意：webm 同时在视频与音频集合里，按后缀无法区分；
-        # 视频集合优先（上面的判断已覆盖），音频侧用 mime 兜底在 save_media 里做。
         return 'audio'
     return 'image'
 
@@ -176,7 +182,7 @@ def save_media(file_storage, user=None, user_id=None, post_id=None):
         )
 
     ext = original_name.rsplit('.', 1)[1].lower()
-    media_type = _media_type_of(ext)
+    media_type = _media_type_of(ext, file_storage.mimetype)
 
     # 读取到内存以便精确控制大小（同时也避免超限文件落盘）
     file_storage.stream.seek(0, os.SEEK_END)
@@ -231,6 +237,107 @@ def save_media_list(files, user=None, user_id=None, post_id=None):
         elif saved:
             media.append(saved)
     return media, errors
+
+
+def _relative_from_media_item(item):
+    """从已上传文件的 [{url,path}] 结构中提取相对路径（供二次校验用）。"""
+    prefix = current_app.config.get('API_PREFIX', '/api/v1').rstrip('/') + '/files/'
+    url = str(item.get('url') or '').replace('\\', '/').lstrip('/')
+    path = str(item.get('path') or '').replace('\\', '/').lstrip('/')
+    if path:
+        return path
+    if url.startswith(prefix):
+        return url[len(prefix):]
+    if url.startswith('files/'):
+        return url[len('files/'):]
+    return ''
+
+
+def sanitize_media_list(items, user=None, allowed_types=('image', 'video', 'audio'), max_count=9):
+    """校验业务提交的 media 数组，只允许引用当前用户真正上传过的文件。
+
+    :param items: [{id,url,path,type,...}]，通常来自 /common/upload 的返回
+    :param user: 当前用户；非空时必须与上传记录归属一致，防止盗用他人文件
+    :return: (规整后的 media 列表, 错误信息)，错误信息为 None 表示通过
+    """
+    from ..models import UploadFile
+
+    if items in (None, '', []):
+        return [], None
+    if not isinstance(items, list):
+        return None, '媒体列表格式不正确'
+    if len(items) > max_count:
+        return None, f'最多只能上传 {max_count} 个媒体文件'
+
+    allowed = set(allowed_types or ())
+    cleaned = []
+    seen = set()
+    for item in items:
+        if not isinstance(item, dict):
+            return None, '媒体列表格式不正确'
+
+        record = None
+        raw_id = item.get('id')
+        if raw_id not in (None, '', 0):
+            try:
+                record = UploadFile.query.get(int(raw_id))
+            except (TypeError, ValueError):
+                record = None
+        if record is None:
+            rel_path = _relative_from_media_item(item)
+            if rel_path:
+                record = UploadFile.query.filter_by(path=rel_path).first()
+        if record is None:
+            return None, '媒体文件不存在，请重新上传后再提交'
+
+        user_id = getattr(user, 'id', None)
+        if user_id and record.user_id not in (None, user_id):
+            return None, '不能引用他人上传的媒体文件'
+
+        item_type = (record.media_type or item.get('type') or '').lower()
+        if item_type not in allowed:
+            return None, f'不支持 {item_type or "未知"} 类型的媒体'
+        if record.id in seen:
+            continue
+        seen.add(record.id)
+        cleaned.append({
+            'id': record.id,
+            'url': record.url,
+            'path': record.path,
+            'name': record.original_name,
+            'type': item_type,
+            'size': record.size,
+            'mime': record.mime,
+        })
+    return cleaned, None
+
+
+def attach_upload_owners(media, owner_type, owner_id):
+    """把 media 里的上传记录挂到评论 / 私信等业务对象上（防止被当成孤儿文件）。"""
+    from ..models import UploadFile
+
+    count = 0
+    for item in media or []:
+        if not isinstance(item, dict):
+            continue
+        record = None
+        raw_id = item.get('id')
+        if raw_id not in (None, '', 0):
+            try:
+                record = UploadFile.query.get(int(raw_id))
+            except (TypeError, ValueError):
+                record = None
+        if record is None:
+            rel_path = _relative_from_media_item(item)
+            if rel_path:
+                record = UploadFile.query.filter_by(path=rel_path).first()
+        if record is None:
+            continue
+        record.attach_to(owner_type, owner_id)
+        if owner_type == 'post':
+            record.post_id = owner_id
+        count += 1
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +458,8 @@ __all__ = [
     'build_relative_path',
     'save_media',
     'save_media_list',
+    'sanitize_media_list',
+    'attach_upload_owners',
     'send_upload_file',
     'delete_media_by_paths',
     'delete_user_upload_dir',

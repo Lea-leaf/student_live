@@ -10,7 +10,9 @@ from ...utils.auth import token_required
 from ...utils.config_service import get_config, get_config_bool
 from ...utils.constants import (
     AUDIT_STATUS_LABELS,
+    MESSAGE_TYPE_LABELS,
     MODULE_LOST_FOUND,
+    NOTIFY_TYPE_LABELS,
     POST_STATUS_LABELS,
     REPORT_STATUS_LABELS,
     ROLE_LABELS,
@@ -30,6 +32,8 @@ def enums():
         'report_status': _pairs(REPORT_STATUS_LABELS),
         'user_status': _pairs(USER_STATUS_LABELS),
         'role': _pairs(ROLE_LABELS),
+        'notify_type': _pairs(NOTIFY_TYPE_LABELS),
+        'message_type': _pairs(MESSAGE_TYPE_LABELS),
     })
 
 
@@ -58,6 +62,7 @@ def public_configs():
         'guest_can_detail': get_config_bool('guest_can_detail', False),
         'upload_max_mb_image': get_config('upload_max_mb_image', '10'),
         'upload_max_mb_video': get_config('upload_max_mb_video', '50'),
+        'upload_max_mb_audio': get_config('upload_max_mb_audio', '5'),
     })
 
 

@@ -167,8 +167,8 @@ def test_purge_post_removes_files_and_relations(client, app, admin_token, studen
         assert check_orphans() == []
 
 
-def test_user_can_delete_own_comment(client, app, student, student_token, sample_post):
-    """用户可删自己的评论，不能删别人的；删后计数回写。"""
+def test_user_can_recall_own_comment(client, app, student, student_token, sample_post):
+    """用户可在 5 分钟内撤回自己的评论：数据库物理删除，计数回写。"""
     from app.extensions import db
     from app.models import Comment, Post
 
@@ -177,13 +177,18 @@ def test_user_can_delete_own_comment(client, app, student, student_token, sample
         db.session.add(comment)
         db.session.commit()
         comment_id = comment.id
+        post = Post.query.get(sample_post)
+        post.comment_count = 1
+        db.session.commit()
 
     response = client.delete(f'/api/v1/comments/{comment_id}', headers=auth_header(student_token))
-    assert response.get_json()['code'] == 0
+    body = response.get_json()
+    assert body['code'] == 0, body
+    assert '撤回' in body['msg']
 
     with app.app_context():
-        assert Comment.query.get(comment_id).is_deleted is True
-        # 列表接口不再返回
+        assert Comment.query.get(comment_id) is None
+        assert Post.query.get(sample_post).comment_count == 0
         listing = client.get(f'/api/v1/comments/posts/{sample_post}/comments').get_json()
         assert listing['data']['total'] == 0
 
@@ -210,10 +215,12 @@ def test_user_cannot_delete_others_comment(client, app, student, student2, stude
     with app.app_context():
         assert Comment.query.get(comment_id).is_deleted is False
 
-    # 作者本人可以删
+    # 作者本人在 5 分钟内可以撤回（物理删除）
     own = client.delete(f'/api/v1/comments/{comment_id}',
                         headers=auth_header(login(client, '20210002', '123456')))
     assert own.get_json()['code'] == 0
+    with app.app_context():
+        assert Comment.query.get(comment_id) is None
 
 
 def test_admin_can_delete_any_comment(client, app, student, admin_token, sample_post):
@@ -232,11 +239,23 @@ def test_admin_can_delete_any_comment(client, app, student, admin_token, sample_
     assert listing['data']['total'] == 1
     assert listing['data']['list'][0]['post']['id'] == sample_post
 
-    purged = client.delete(f'/api/v1/admin/comments/{comment_id}?purge=1',
+    # v1.2 起管理员删除默认就是物理删除，不再需要 ?purge=1
+    purged = client.delete(f'/api/v1/admin/comments/{comment_id}',
                            headers=auth_header(admin_token)).get_json()
     assert purged['code'] == 0
     with app.app_context():
+        import json as _json
+
+        from app.models import Comment, OperationLog
+
         assert Comment.query.get(comment_id) is None
+        # 操作日志里保留被删评论的数据库信息快照
+        log = OperationLog.query.filter_by(action='delete_comment',
+                                           target_id=comment_id).first()
+        assert log is not None
+        detail = _json.loads(log.detail)
+        assert detail['content'] == '违规内容'
+        assert detail['post_id'] == sample_post
 
 
 # ---------------------------------------------------------------------------

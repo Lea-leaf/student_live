@@ -34,7 +34,12 @@ function markAll() {
 function openLink(item) {
   markRead(item)
   const link = item.link
-  if (link && link.route === 'post-detail' && link.post_id) {
+  if (!link) return
+  if (link.route === 'messages' && link.user_id) {
+    router.push({ name: 'messages', query: { user: link.user_id } })
+    return
+  }
+  if (link.route === 'post-detail' && link.post_id) {
     router.push({ name: 'post-detail', params: { id: link.post_id } })
   }
 }
@@ -43,6 +48,8 @@ const typeLabels = {
   audit: '审核',
   comment: '评论',
   message: '私信',
+  like: '点赞',
+  mention: '提到我',
   system: '系统'
 }
 </script>

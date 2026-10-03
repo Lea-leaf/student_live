@@ -94,6 +94,12 @@ const routes = [
         meta: { title: '消息通知', requiresAuth: true }
       },
       {
+        path: 'messages',
+        name: 'messages',
+        component: () => import('@/views/user/MessagesView.vue'),
+        meta: { title: '我的私信', requiresAuth: true }
+      },
+      {
         path: 'profile',
         name: 'profile',
         component: () => import('@/views/user/ProfileView.vue'),

@@ -16,6 +16,7 @@ from . import (
     comments,
     common,
     favorites,
+    likes,
     lost_found,
     messages,
     notifications,
@@ -29,13 +30,17 @@ MODULE_BLUEPRINTS = {
     'lost_found': lost_found.bp,
     'comments': comments.bp,
     'messages': messages.bp,
+    'likes': likes.bp,
     'favorites': favorites.bp,
     'reports': reports.bp,
     'notifications': notifications.bp,
 }
 
 #: 已实现完整业务的模块（其余为占位，接口返回明确的「待开放」）
-IMPLEMENTED_MODULES = ('auth', 'common', 'lost_found', 'favorites', 'reports', 'notifications')
+IMPLEMENTED_MODULES = (
+    'auth', 'common', 'lost_found', 'favorites', 'reports', 'notifications',
+    'comments', 'messages', 'likes',
+)
 
 
 def register_module_blueprints(app):

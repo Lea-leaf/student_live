@@ -28,13 +28,16 @@ from ..extensions import db
 from ..models import (
     AdminModuleAccess,
     Comment,
+    CommentLike,
     Favorite,
     Message,
     Notification,
     OperationLog,
     Post,
+    PostLike,
     Report,
     UploadFile,
+    User,
 )
 from . import uploads as upload_utils
 
@@ -58,7 +61,9 @@ def purge_post(post, delete_files=True):
     paths = [row.path for row in media_rows]
 
     comments = Comment.query.filter_by(post_id=post.id).all()
+    comment_ids = [row.id for row in comments]
     favorites = Favorite.query.filter_by(post_id=post.id).all()
+    post_likes = PostLike.query.filter_by(post_id=post.id).all()
 
     # 举报：保留记录（审计价值），但必须解除对已删内容的引用
     reports = Report.query.filter_by(post_id=post.id).all()
@@ -67,9 +72,22 @@ def purge_post(post, delete_files=True):
         if not report.handle_remark:
             report.handle_remark = '关联内容已被删除'
 
+    # 私信可能关联帖子：帖子删了就把引用置空（不产生孤儿指针）
+    Message.query.filter_by(post_id=post.id).update({'post_id': None}, synchronize_session=False)
+
+    # 先清点赞关系，再删评论 / 帖子，避免外键约束报错
+    comment_like_count = 0
+    if comment_ids:
+        comment_like_count = CommentLike.query.filter(
+            CommentLike.comment_id.in_(comment_ids)
+        ).count()
+        CommentLike.query.filter(CommentLike.comment_id.in_(comment_ids)).delete(
+            synchronize_session=False)
     for row in comments:
         db.session.delete(row)
     for row in favorites:
+        db.session.delete(row)
+    for row in post_likes:
         db.session.delete(row)
     for row in media_rows:
         db.session.delete(row)
@@ -84,6 +102,8 @@ def purge_post(post, delete_files=True):
         'post_id': post.id,
         'comments': len(comments),
         'favorites': len(favorites),
+        'post_likes': len(post_likes),
+        'comment_likes': comment_like_count,
         'media_rows': len(media_rows),
         'media_files': removed_files,
         'reports_detached': len(reports),
@@ -93,23 +113,152 @@ def purge_post(post, delete_files=True):
 # ---------------------------------------------------------------------------
 # 评论
 # ---------------------------------------------------------------------------
+def collect_comment_subtree_ids(comment):
+    """按 parent_id 逐层收集评论及其全部后代 ID（支持任意层级楼中楼）。"""
+    ids = [comment.id]
+    stack = [comment.id]
+    while stack:
+        parent_id = stack.pop()
+        children = Comment.query.with_entities(Comment.id).filter(
+            Comment.parent_id == parent_id
+        ).all()
+        for (child_id,) in children:
+            ids.append(child_id)
+            stack.append(child_id)
+    return ids
+
+
 def purge_comment(comment):
-    """删除一条评论及其子回复，并回写帖子的评论计数（避免计数漂移）。"""
+    """彻底删除一条评论及其全部子回复、点赞、媒体文件，并回写帖子计数。"""
+    comment_id = comment.id
     post_id = comment.post_id
-    removed = 0
-    for reply in Comment.query.filter_by(parent_id=comment.id).all():
-        db.session.delete(reply)
-        removed += 1
-    db.session.delete(comment)
-    removed += 1
+    parent_id = comment.parent_id
+    comment_ids = collect_comment_subtree_ids(comment)
+
+    # 收集这些评论引用的媒体（优先 upload_files 归属，其次兼容 media JSON 里的 id/path）
+    media_rows = UploadFile.query.filter(
+        UploadFile.owner_type == 'comment', UploadFile.owner_id.in_(comment_ids)
+    ).all()
+    media_paths = [row.path for row in media_rows if row.path]
+    known_paths = set(media_paths)
+
+    import json as _json
+
+    for row in Comment.query.filter(Comment.id.in_(comment_ids)).all():
+        if not row.media:
+            continue
+        try:
+            items = _json.loads(row.media)
+        except (TypeError, ValueError):
+            continue
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            rel_path = item.get('path')
+            raw_id = item.get('id')
+            if rel_path and rel_path not in known_paths:
+                known_paths.add(rel_path)
+                media_paths.append(rel_path)
+            if raw_id:
+                try:
+                    record = UploadFile.query.get(int(raw_id))
+                except (TypeError, ValueError):
+                    record = None
+                if record and record.path and record.path not in known_paths:
+                    known_paths.add(record.path)
+                    media_paths.append(record.path)
+                    media_rows.append(record)
+
+    # 删除点赞、相关互动通知、媒体记录、评论本体
+    CommentLike.query.filter(CommentLike.comment_id.in_(comment_ids)).delete(
+        synchronize_session=False)
+    from ..utils.constants import NOTIFY_COMMENT, NOTIFY_LIKE, NOTIFY_MENTION
+
+    Notification.query.filter(
+        Notification.ref_id.in_(comment_ids),
+        Notification.type.in_((NOTIFY_COMMENT, NOTIFY_LIKE, NOTIFY_MENTION)),
+    ).delete(synchronize_session=False)
+    for record in {row.id: row for row in media_rows}.values():
+        db.session.delete(record)
+    Comment.query.filter(Comment.id.in_(comment_ids)).delete(synchronize_session=False)
     db.session.commit()
 
-    # 重算计数，避免 comment_count 与实际行数不一致
+    # 重算帖子评论数
     post = Post.query.get(post_id) if post_id else None
     if post:
         post.comment_count = Comment.query.filter_by(post_id=post_id, is_deleted=False).count()
-        db.session.commit()
-    return {'comment_id': comment.id, 'removed': removed, 'post_id': post_id}
+    # 重算直接父评论的回复数
+    if parent_id:
+        parent = Comment.query.get(parent_id)
+        if parent:
+            parent.reply_count = Comment.query.filter_by(
+                parent_id=parent_id, is_deleted=False
+            ).count()
+    db.session.commit()
+
+    removed_files = upload_utils.delete_media_by_paths(media_paths)
+    return {
+        'comment_id': comment_id,
+        'removed': len(comment_ids),
+        'removed_files': removed_files,
+        'post_id': post_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 私信
+# ---------------------------------------------------------------------------
+def purge_message(message):
+    """彻底删除一条私信（撤回 / 双方都删除后清理）。
+
+    同时清理：
+    - `upload_files` 中 owner_type='message' 的媒体记录与磁盘文件；
+    - 接收方的私信通知（ref_id 指向该消息），避免通知点进去是空会话。
+    """
+    import json
+
+    message_id = message.id
+    media_rows = UploadFile.query.filter_by(
+        owner_type='message', owner_id=message_id).all()
+    media_paths = [row.path for row in media_rows if row.path]
+    known_paths = set(media_paths)
+
+    # 兼容历史数据：media JSON 里有 id/path 但 owner 未回写的情况
+    if message.media:
+        try:
+            items = json.loads(message.media)
+        except (TypeError, ValueError):
+            items = []
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            rel_path = item.get('path')
+            if rel_path and rel_path not in known_paths:
+                known_paths.add(rel_path)
+                media_paths.append(rel_path)
+            raw_id = item.get('id')
+            if raw_id:
+                try:
+                    record = UploadFile.query.get(int(raw_id))
+                except (TypeError, ValueError):
+                    record = None
+                if record and record.path and record.path not in known_paths:
+                    known_paths.add(record.path)
+                    media_paths.append(record.path)
+                    media_rows.append(record)
+
+    for record in {row.id: row for row in media_rows}.values():
+        db.session.delete(record)
+    Notification.query.filter_by(type='message', ref_id=message_id).delete(
+        synchronize_session=False)
+    db.session.delete(message)
+    db.session.commit()
+
+    removed_files = upload_utils.delete_media_by_paths(media_paths)
+    return {
+        'message_id': message_id,
+        'removed_files': removed_files,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +294,7 @@ def purge_user(user, delete_files=True):
         'reports': 0,
         'messages': 0,
         'notifications': 0,
+        'likes': 0,
         'media_rows': 0,
         'media_files': 0,
         'leftover_files': 0,
@@ -159,7 +309,24 @@ def purge_user(user, delete_files=True):
         stats['favorites'] += result['favorites']
         stats['media_rows'] += result['media_rows']
 
-    # ---- 2. 该用户发出的其它数据 ----
+    # ---- 2. 点赞关系：必须在删评论之前清理，否则 comment_likes 的外键会拦住 ----
+    own_comment_ids = [row[0] for row in
+                       db.session.query(Comment.id).filter(Comment.user_id == uid).all()]
+    # 2.1 他名下评论收到的赞（别人点的）
+    like_count = 0
+    if own_comment_ids:
+        like_count += CommentLike.query.filter(
+            CommentLike.comment_id.in_(own_comment_ids)).count()
+        CommentLike.query.filter(CommentLike.comment_id.in_(own_comment_ids)).delete(
+            synchronize_session=False)
+    # 2.2 他发出的帖子赞 / 评论赞
+    like_count += PostLike.query.filter_by(user_id=uid).count()
+    PostLike.query.filter_by(user_id=uid).delete(synchronize_session=False)
+    like_count += CommentLike.query.filter_by(user_id=uid).count()
+    CommentLike.query.filter_by(user_id=uid).delete(synchronize_session=False)
+    stats['likes'] = like_count
+
+    # ---- 3. 该用户发出的其它数据 ----
     # 注意：各表的"归属字段"不统一，不能用通用的 user_id 批量处理。
     #   Message 用 sender_id / receiver_id 两个字段；
     #   AdminModuleAccess 用 user_id；
@@ -178,6 +345,8 @@ def purge_user(user, delete_files=True):
         if key:
             stats[key] += count
 
+    # ---- 4. 私信 ----
+
     # 私信：发件与收件分别清理（Message 没有 user_id 列）
     sent = Message.query.filter_by(sender_id=uid).count()
     Message.query.filter_by(sender_id=uid).delete(synchronize_session=False)
@@ -186,7 +355,7 @@ def purge_user(user, delete_files=True):
     stats['messages'] += sent + received
     db.session.commit()
 
-    # ---- 3. 举报：保留审计记录，解除对用户/内容的引用 ----
+    # ---- 5. 举报：保留审计记录，解除对用户/内容的引用 ----
     reports = Report.query.filter_by(reporter_id=uid).all()
     reports += Report.query.filter_by(target_user_id=uid).all()
     for report in reports:
@@ -200,22 +369,22 @@ def purge_user(user, delete_files=True):
                 report.handle_remark = '被举报用户已注销'
     db.session.commit()
 
-    # ---- 4. 日志：保留但置空 user_id（审计价值 > 引用完整性）----
+    # ---- 6. 日志：保留但置空 user_id（审计价值 > 引用完整性）----
     OperationLog.query.filter_by(user_id=uid).update({'user_id': None}, synchronize_session=False)
     db.session.commit()
 
-    # ---- 5. 删除磁盘文件 ----
+    # ---- 7. 删除磁盘文件 ----
     if delete_files:
-        # 5.1 按数据库记录精确删除（统计进 media_files）
+        # 7.1 按数据库记录精确删除（统计进 media_files）
         stats['media_files'] = upload_utils.delete_media_by_paths(media_paths)
-        # 5.2 整目录兜底：目录里可能还有记录已丢失的历史遗留文件
+        # 7.2 整目录兜底：目录里可能还有记录已丢失的历史遗留文件
         leftover, directory = upload_utils.delete_user_upload_dir(
             student_id=student_id, user_id=uid
         )
         stats['leftover_files'] = leftover
         stats['upload_dir'] = directory
 
-    # ---- 6. 最后删用户本体 ----
+    # ---- 8. 最后删用户本体 ----
     db.session.delete(user)
     db.session.commit()
 
@@ -245,14 +414,25 @@ def check_orphans():
 
     post_ids = [row[0] for row in db.session.query(Post.id).all()]
     comment_ids = [row[0] for row in db.session.query(Comment.id).all()]
+    user_ids = [row[0] for row in db.session.query(User.id).all()]
 
     collect('评论指向不存在的帖子',
             db.session.query(Comment.id).filter(Comment.post_id.notin_(post_ids)))
     collect('收藏指向不存在的帖子',
             db.session.query(Favorite.id).filter(Favorite.post_id.notin_(post_ids)))
+    collect('帖子点赞指向不存在的帖子',
+            db.session.query(PostLike.id).filter(PostLike.post_id.notin_(post_ids)))
+    collect('帖子点赞指向不存在的用户',
+            db.session.query(PostLike.id).filter(PostLike.user_id.notin_(user_ids)))
+    collect('评论点赞指向不存在的评论',
+            db.session.query(CommentLike.id).filter(CommentLike.comment_id.notin_(comment_ids)))
     collect('回复指向不存在的父评论',
             db.session.query(Comment.id).filter(Comment.parent_id.isnot(None),
                                               Comment.parent_id.notin_(comment_ids)))
+    collect('私信指向不存在的发送者',
+            db.session.query(Message.id).filter(Message.sender_id.notin_(user_ids)))
+    collect('私信指向不存在的接收者',
+            db.session.query(Message.id).filter(Message.receiver_id.notin_(user_ids)))
     return problems
 
 
@@ -275,4 +455,5 @@ def media_orphan_files():
     return orphans
 
 
-__all__ = ['purge_post', 'purge_comment', 'purge_user', 'check_orphans', 'media_orphan_files']
+__all__ = ['purge_post', 'purge_comment', 'purge_message', 'purge_user',
+           'check_orphans', 'media_orphan_files']
