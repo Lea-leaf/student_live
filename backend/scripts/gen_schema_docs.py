@@ -29,19 +29,22 @@ DOCS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '
 
 #: 表注释（SQLite 不支持 COMMENT，写进文档里补充说明）
 TABLE_COMMENTS = {
-    'users': '用户（学生 / 管理员）',
-    'posts': '帖子（所有模块统一存储，type 区分模块）',
+    'users': '用户（普通用户 / 内容审核员 / 管理员）',
+    'posts': '帖子（所有模块统一存储，type 区分模块；含审核指派字段）',
+    'post_audit_logs': '审核流水（指派 / 认领 / 退回 / 通过 / 拒绝）',
     'modules': '功能模块定义（可后台启停 / 排序 / 新增）',
     'comments': '帖子评论',
     'messages': '站内私信',
     'favorites': '收藏',
+    'post_likes': '帖子点赞',
+    'comment_likes': '评论点赞',
     'reports': '举报',
     'notifications': '站内通知',
     'operation_logs': '操作日志',
     'login_logs': '登录日志',
     'system_configs': '系统配置（键值对）',
     'upload_files': '上传文件记录',
-    'admin_module_access': '管理员-模块授权（RBAC 预留）',
+    'admin_module_access': '管理员-模块授权（RBAC 预留，未启用）',
 }
 
 

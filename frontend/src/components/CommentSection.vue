@@ -80,8 +80,15 @@ function canRecall(comment) {
   return diff >= 0 && diff <= RECALL_WINDOW_MS
 }
 
-/** 管理员始终可以物理删除任意评论 */
-const isAdmin = computed(() => userStore.isAdmin)
+/**
+ * 谁能在这里直接物理删除任意评论：**只有真正的管理员**。
+ *
+ * 审核员也有删评论的权限，但必须走管理端（`DELETE /admin/comments/<id>`），
+ * 那里有权限校验与操作日志留痕；用户端接口对非管理员仍按
+ * 「只能撤回自己 5 分钟内的评论」处理。
+ * 早期这里用 `isAdmin`（= is_staff），会把删除按钮错误地显示给审核员。
+ */
+const isAdmin = computed(() => userStore.isTrueAdmin)
 
 async function submitTop(payload) {
   submitting.value = true

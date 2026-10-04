@@ -36,6 +36,7 @@ from ..models import (
     Notification,
     OperationLog,
     Post,
+    PostAuditLog,
     PostLike,
     Report,
     UploadFile,
@@ -66,6 +67,10 @@ def purge_post(post, delete_files=True):
     comment_ids = [row.id for row in comments]
     favorites = Favorite.query.filter_by(post_id=post.id).all()
     post_likes = PostLike.query.filter_by(post_id=post.id).all()
+
+    # 审核流水（post_audit_logs.post_id 为 NOT NULL，必须先删，否则外键报错）
+    audit_log_count = PostAuditLog.query.filter_by(post_id=post.id).delete(
+        synchronize_session=False)
 
     # 举报：保留记录（审计价值），但必须解除对已删内容的引用
     reports = Report.query.filter_by(post_id=post.id).all()
@@ -109,6 +114,7 @@ def purge_post(post, delete_files=True):
         'media_rows': len(media_rows),
         'media_files': removed_files,
         'reports_detached': len(reports),
+        'audit_logs': audit_log_count,
     }
 
 
@@ -300,6 +306,7 @@ def purge_user(user, delete_files=True):
         'media_rows': 0,
         'media_files': 0,
         'leftover_files': 0,
+        'audit_logs_cleared': 0,
         'upload_dir': None,
     }
 
@@ -373,6 +380,13 @@ def purge_user(user, delete_files=True):
 
     # ---- 6. 日志：保留但置空 user_id（审计价值 > 引用完整性）----
     OperationLog.query.filter_by(user_id=uid).update({'user_id': None}, synchronize_session=False)
+    # 审核流水同理：他是审核员时留下的记录仍有审计价值（谁审的哪条、用了多久），
+    # 但要解除对已注销用户的引用，避免出现指向不存在用户的裸指针。
+    cleared_actor = PostAuditLog.query.filter_by(actor_id=uid).update(
+        {'actor_id': None}, synchronize_session=False)
+    cleared_assignee = PostAuditLog.query.filter_by(assignee_id=uid).update(
+        {'assignee_id': None}, synchronize_session=False)
+    stats['audit_logs_cleared'] = cleared_actor + cleared_assignee
     db.session.commit()
 
     # ---- 7. 删除磁盘文件 ----

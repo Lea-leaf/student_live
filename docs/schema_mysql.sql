@@ -26,9 +26,9 @@ CREATE TABLE login_logs (
 
 CREATE INDEX ix_login_logs_success ON login_logs (success);
 
-CREATE INDEX ix_login_logs_student_id ON login_logs (student_id);
-
 CREATE INDEX ix_login_logs_user_id ON login_logs (user_id);
+
+CREATE INDEX ix_login_logs_student_id ON login_logs (student_id);
 
 CREATE TABLE modules (
 	code VARCHAR(64) NOT NULL COMMENT '模块标识（=posts.type）', 
@@ -68,9 +68,9 @@ CREATE TABLE operation_logs (
 
 CREATE INDEX ix_operation_logs_module ON operation_logs (module);
 
-CREATE INDEX ix_operation_logs_user_id ON operation_logs (user_id);
-
 CREATE INDEX ix_operation_logs_log_type ON operation_logs (log_type);
+
+CREATE INDEX ix_operation_logs_user_id ON operation_logs (user_id);
 
 CREATE TABLE system_configs (
 	`key` VARCHAR(64) NOT NULL COMMENT '配置键', 
@@ -85,9 +85,9 @@ CREATE TABLE system_configs (
 	PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置（键值对）';
 
-CREATE INDEX ix_system_configs_group ON system_configs (`group`);
-
 CREATE UNIQUE INDEX ix_system_configs_key ON system_configs (`key`);
+
+CREATE INDEX ix_system_configs_group ON system_configs (`group`);
 
 CREATE TABLE users (
 	username VARCHAR(64) NOT NULL COMMENT '登录名（默认=学号）', 
@@ -107,19 +107,30 @@ CREATE TABLE users (
 	login_count INTEGER NOT NULL COMMENT '累计登录次数', 
 	post_count INTEGER NOT NULL COMMENT '发帖计数（冗余，便于统计）', 
 	remark VARCHAR(255) COMMENT '管理员备注', 
+	handover_to_id INTEGER COMMENT '管理员权限拟移交给谁', 
+	handover_at DATETIME COMMENT '移交发起时间（北京时间）', 
+	handover_effective_at DATETIME COMMENT '移交生效时间（北京时间）', 
+	handover_freeze_at DATETIME COMMENT '待上任冻结开始时间；非空即冻结中', 
+	handover_prev_role VARCHAR(32) COMMENT '接管前的原角色，用于冻结期授权与撤销时恢复', 
 	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
 	created_at DATETIME NOT NULL COMMENT '创建时间', 
 	updated_at DATETIME NOT NULL COMMENT '更新时间', 
 	PRIMARY KEY (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户（学生 / 管理员）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户（普通用户 / 内容审核员 / 管理员）';
 
-CREATE INDEX ix_users_role ON users (`role`);
+CREATE INDEX ix_users_handover_to_id ON users (handover_to_id);
 
 CREATE UNIQUE INDEX ix_users_username ON users (username);
 
+CREATE UNIQUE INDEX ix_users_student_id ON users (student_id);
+
 CREATE INDEX ix_users_status ON users (status);
 
-CREATE UNIQUE INDEX ix_users_student_id ON users (student_id);
+CREATE INDEX ix_users_handover_freeze_at ON users (handover_freeze_at);
+
+CREATE INDEX ix_users_role ON users (`role`);
+
+CREATE INDEX ix_users_handover_effective_at ON users (handover_effective_at);
 
 CREATE TABLE admin_module_access (
 	user_id INTEGER NOT NULL COMMENT '管理员', 
@@ -131,7 +142,7 @@ CREATE TABLE admin_module_access (
 	PRIMARY KEY (id), 
 	CONSTRAINT uq_admin_module UNIQUE (user_id, module_code), 
 	FOREIGN KEY(user_id) REFERENCES users (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理员-模块授权（RBAC 预留）';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理员-模块授权（RBAC 预留，未启用）';
 
 CREATE INDEX ix_admin_module_access_module_code ON admin_module_access (module_code);
 
@@ -140,11 +151,15 @@ CREATE INDEX ix_admin_module_access_user_id ON admin_module_access (user_id);
 CREATE TABLE messages (
 	sender_id INTEGER NOT NULL COMMENT '发送者', 
 	receiver_id INTEGER NOT NULL COMMENT '接收者', 
-	content TEXT NOT NULL COMMENT '内容', 
+	content TEXT NOT NULL COMMENT '文本内容（纯图片/语音时存空字符串，与数据库 NOT NULL 对齐）', 
+	msg_type VARCHAR(16) NOT NULL COMMENT '消息类型', 
+	media TEXT COMMENT '图片/语音/视频(JSON数组)', 
 	is_read TINYINT(1) NOT NULL COMMENT '是否已读', 
 	read_at DATETIME COMMENT '阅读时间', 
 	conversation_key VARCHAR(64) COMMENT '会话键', 
 	post_id INTEGER COMMENT '关联帖子ID', 
+	sender_deleted TINYINT(1) NOT NULL COMMENT '发送方已删除', 
+	receiver_deleted TINYINT(1) NOT NULL COMMENT '接收方已删除', 
 	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
 	created_at DATETIME NOT NULL COMMENT '创建时间', 
 	updated_at DATETIME NOT NULL COMMENT '更新时间', 
@@ -153,13 +168,15 @@ CREATE TABLE messages (
 	FOREIGN KEY(receiver_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='站内私信';
 
-CREATE INDEX ix_messages_sender_id ON messages (sender_id);
+CREATE INDEX ix_messages_receiver_id ON messages (receiver_id);
 
-CREATE INDEX ix_messages_conversation_key ON messages (conversation_key);
+CREATE INDEX ix_messages_msg_type ON messages (msg_type);
 
 CREATE INDEX ix_messages_is_read ON messages (is_read);
 
-CREATE INDEX ix_messages_receiver_id ON messages (receiver_id);
+CREATE INDEX ix_messages_sender_id ON messages (sender_id);
+
+CREATE INDEX ix_messages_conversation_key ON messages (conversation_key);
 
 CREATE TABLE notifications (
 	user_id INTEGER NOT NULL COMMENT '接收人', 
@@ -177,9 +194,9 @@ CREATE TABLE notifications (
 	FOREIGN KEY(user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='站内通知';
 
-CREATE INDEX ix_notifications_user_id ON notifications (user_id);
-
 CREATE INDEX ix_notifications_type ON notifications (type);
+
+CREATE INDEX ix_notifications_user_id ON notifications (user_id);
 
 CREATE INDEX ix_notifications_is_read ON notifications (is_read);
 
@@ -197,10 +214,15 @@ CREATE TABLE posts (
 	audit_remark VARCHAR(255) COMMENT '审核意见', 
 	audited_by INTEGER COMMENT '审核人', 
 	audited_at DATETIME COMMENT '审核时间', 
+	assignee_id INTEGER COMMENT '当前指派/认领的审核员ID', 
+	assigned_by INTEGER COMMENT '指派人ID', 
+	assigned_at DATETIME COMMENT '指派/认领时间', 
+	assignment_expires_at DATETIME COMMENT '认领到期时间（超时自动退回公共池）', 
 	is_top TINYINT(1) NOT NULL COMMENT '是否置顶', 
 	view_count INTEGER NOT NULL COMMENT '浏览量', 
-	comment_count INTEGER NOT NULL COMMENT '评论数', 
+	comment_count INTEGER NOT NULL COMMENT '评论数（含楼中楼回复）', 
 	favorite_count INTEGER NOT NULL COMMENT '收藏数', 
+	like_count INTEGER NOT NULL COMMENT '点赞数', 
 	is_deleted TINYINT(1) NOT NULL COMMENT '是否已删除(软删除)', 
 	deleted_at DATETIME COMMENT '删除时间', 
 	deleted_by INTEGER COMMENT '删除人', 
@@ -210,23 +232,29 @@ CREATE TABLE posts (
 	updated_at DATETIME NOT NULL COMMENT '更新时间', 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子（所有模块统一存储，type 区分模块）';
-
-CREATE INDEX ix_posts_audit_status ON posts (audit_status);
-
-CREATE INDEX ix_posts_user_id ON posts (user_id);
-
-CREATE INDEX ix_posts_audit_created ON posts (audit_status, created_at);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子（所有模块统一存储，type 区分模块；含审核指派字段）';
 
 CREATE INDEX ix_posts_type ON posts (type);
-
-CREATE INDEX ix_posts_is_deleted ON posts (is_deleted);
-
-CREATE INDEX ix_posts_status ON posts (status);
 
 CREATE INDEX ix_posts_is_top ON posts (is_top);
 
 CREATE INDEX ix_posts_type_status_deleted ON posts (type, status, is_deleted);
+
+CREATE INDEX ix_posts_status ON posts (status);
+
+CREATE INDEX ix_posts_is_deleted ON posts (is_deleted);
+
+CREATE INDEX ix_posts_audit_status ON posts (audit_status);
+
+CREATE INDEX ix_posts_audit_assignee ON posts (audit_status, assignee_id);
+
+CREATE INDEX ix_posts_assignee_id ON posts (assignee_id);
+
+CREATE INDEX ix_posts_audit_created ON posts (audit_status, created_at);
+
+CREATE INDEX ix_posts_assignment_expires_at ON posts (assignment_expires_at);
+
+CREATE INDEX ix_posts_user_id ON posts (user_id);
 
 CREATE TABLE upload_files (
 	user_id INTEGER COMMENT '上传者', 
@@ -235,15 +263,23 @@ CREATE TABLE upload_files (
 	path VARCHAR(255) NOT NULL COMMENT '相对路径', 
 	url VARCHAR(255) NOT NULL COMMENT '访问地址', 
 	mime VARCHAR(64) COMMENT 'MIME 类型', 
-	media_type VARCHAR(16) NOT NULL COMMENT 'image / video', 
+	media_type VARCHAR(16) NOT NULL COMMENT 'image / video / audio', 
 	size INTEGER NOT NULL COMMENT '字节数', 
-	post_id INTEGER COMMENT '关联帖子ID', 
+	post_id INTEGER COMMENT '关联帖子ID（兼容保留）', 
+	owner_type VARCHAR(16) COMMENT '归属类型', 
+	owner_id INTEGER COMMENT '归属记录ID', 
 	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
 	created_at DATETIME NOT NULL COMMENT '创建时间', 
 	updated_at DATETIME NOT NULL COMMENT '更新时间', 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上传文件记录';
+
+CREATE INDEX ix_upload_files_owner_type ON upload_files (owner_type);
+
+CREATE INDEX ix_upload_files_owner_id ON upload_files (owner_id);
+
+CREATE INDEX ix_upload_owner ON upload_files (owner_type, owner_id);
 
 CREATE INDEX ix_upload_files_user_id ON upload_files (user_id);
 
@@ -252,8 +288,13 @@ CREATE INDEX ix_upload_files_post_id ON upload_files (post_id);
 CREATE TABLE comments (
 	post_id INTEGER NOT NULL COMMENT '帖子ID', 
 	user_id INTEGER NOT NULL COMMENT '评论人', 
-	parent_id INTEGER COMMENT '父评论ID（回复）', 
-	content TEXT NOT NULL COMMENT '评论内容', 
+	parent_id INTEGER COMMENT '父评论ID（直接上级）', 
+	root_id INTEGER COMMENT '顶级评论ID（楼中楼）', 
+	content TEXT NOT NULL COMMENT '评论内容（纯图片/语音评论存空字符串，避免 NULL）', 
+	media TEXT COMMENT '图片/视频/语音(JSON数组)', 
+	reply_to_user_id INTEGER COMMENT '被回复的用户ID', 
+	like_count INTEGER NOT NULL COMMENT '点赞数', 
+	reply_count INTEGER NOT NULL COMMENT '直接回复数（冗余计数）', 
 	is_deleted TINYINT(1) NOT NULL COMMENT '软删除', 
 	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
 	created_at DATETIME NOT NULL COMMENT '创建时间', 
@@ -266,9 +307,15 @@ CREATE TABLE comments (
 
 CREATE INDEX ix_comments_post_id ON comments (post_id);
 
-CREATE INDEX ix_comments_is_deleted ON comments (is_deleted);
+CREATE INDEX ix_comments_root_id ON comments (root_id);
 
 CREATE INDEX ix_comments_user_id ON comments (user_id);
+
+CREATE INDEX ix_comments_parent_id ON comments (parent_id);
+
+CREATE INDEX ix_comments_reply_to_user_id ON comments (reply_to_user_id);
+
+CREATE INDEX ix_comments_is_deleted ON comments (is_deleted);
 
 CREATE TABLE favorites (
 	user_id INTEGER NOT NULL COMMENT '用户', 
@@ -285,6 +332,45 @@ CREATE TABLE favorites (
 CREATE INDEX ix_favorites_post_id ON favorites (post_id);
 
 CREATE INDEX ix_favorites_user_id ON favorites (user_id);
+
+CREATE TABLE post_audit_logs (
+	post_id INTEGER NOT NULL COMMENT '帖子ID', 
+	action VARCHAR(16) NOT NULL COMMENT 'assign/claim/release/approve/reject', 
+	actor_id INTEGER COMMENT '操作人ID', 
+	assignee_id INTEGER COMMENT '被指派/认领的审核员ID', 
+	assign_source VARCHAR(16) COMMENT 'admin/self', 
+	remark VARCHAR(255) COMMENT '备注（审核意见 / 改派说明）', 
+	duration_ms INTEGER COMMENT '处理耗时(毫秒)', 
+	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
+	created_at DATETIME NOT NULL COMMENT '创建时间', 
+	updated_at DATETIME NOT NULL COMMENT '更新时间', 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(post_id) REFERENCES posts (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审核流水（指派 / 认领 / 退回 / 通过 / 拒绝）';
+
+CREATE INDEX ix_post_audit_logs_actor_id ON post_audit_logs (actor_id);
+
+CREATE INDEX ix_post_audit_logs_post_id ON post_audit_logs (post_id);
+
+CREATE INDEX ix_post_audit_logs_assignee_id ON post_audit_logs (assignee_id);
+
+CREATE INDEX ix_post_audit_logs_post_action ON post_audit_logs (post_id, action);
+
+CREATE TABLE post_likes (
+	user_id INTEGER NOT NULL COMMENT '点赞人', 
+	post_id INTEGER NOT NULL COMMENT '帖子', 
+	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
+	created_at DATETIME NOT NULL COMMENT '创建时间', 
+	updated_at DATETIME NOT NULL COMMENT '更新时间', 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_post_like_user_post UNIQUE (user_id, post_id), 
+	FOREIGN KEY(user_id) REFERENCES users (id), 
+	FOREIGN KEY(post_id) REFERENCES posts (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='帖子点赞';
+
+CREATE INDEX ix_post_likes_user_id ON post_likes (user_id);
+
+CREATE INDEX ix_post_likes_post_id ON post_likes (post_id);
 
 CREATE TABLE reports (
 	reporter_id INTEGER NOT NULL COMMENT '举报人', 
@@ -306,10 +392,26 @@ CREATE TABLE reports (
 
 CREATE INDEX ix_reports_reporter_id ON reports (reporter_id);
 
+CREATE INDEX ix_reports_target_user_id ON reports (target_user_id);
+
 CREATE INDEX ix_reports_status ON reports (status);
 
 CREATE INDEX ix_reports_post_id ON reports (post_id);
 
-CREATE INDEX ix_reports_target_user_id ON reports (target_user_id);
+CREATE TABLE comment_likes (
+	user_id INTEGER NOT NULL COMMENT '点赞人', 
+	comment_id INTEGER NOT NULL COMMENT '评论', 
+	id INTEGER NOT NULL AUTO_INCREMENT COMMENT '主键', 
+	created_at DATETIME NOT NULL COMMENT '创建时间', 
+	updated_at DATETIME NOT NULL COMMENT '更新时间', 
+	PRIMARY KEY (id), 
+	CONSTRAINT uq_comment_like_user_comment UNIQUE (user_id, comment_id), 
+	FOREIGN KEY(user_id) REFERENCES users (id), 
+	FOREIGN KEY(comment_id) REFERENCES comments (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='评论点赞';
+
+CREATE INDEX ix_comment_likes_comment_id ON comment_likes (comment_id);
+
+CREATE INDEX ix_comment_likes_user_id ON comment_likes (user_id);
 
 SET FOREIGN_KEY_CHECKS = 1;

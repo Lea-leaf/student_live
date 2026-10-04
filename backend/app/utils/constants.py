@@ -6,31 +6,184 @@
 """
 
 # ---------------------------------------------------------------------------
-# 用户
+# 用户角色
+#
+# 【当前实际使用的三个等级】
+#   user     普通用户    —— 无后台权限
+#   auditor  内容审核员  —— 受限后台角色（内容处置 + 管理普通用户）
+#   admin    管理员      —— 最高级，通配全部后台能力
+#
+# `admin` 就是最高等级（早期曾预留 `super_admin` 作为"更高一级"，已彻底移除：
+# 它与 admin 从来没有任何实际差异，只会造成两套口径不一致）。
 # ---------------------------------------------------------------------------
 ROLE_USER = 'user'
 ROLE_ADMIN = 'admin'
-# 预留：RBAC 多级管理员（参见需求文档「管理员分级思路」）
-ROLE_SUPER_ADMIN = 'super_admin'
 ROLE_AUDITOR = 'auditor'
-ROLE_USER_ADMIN = 'user_admin'
-ROLE_MODULE_ADMIN = 'module_admin'
-ROLE_MODERATOR = 'moderator'
 
-ROLES = (ROLE_USER, ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_AUDITOR,
-         ROLE_USER_ADMIN, ROLE_MODULE_ADMIN, ROLE_MODERATOR)
+#: 可被分配的角色（**唯一权威名单**）。
+#: 调整角色接口只接受这里列出的值，前端下拉框也由它下发 ——
+#: 所以「把某个角色从这里注释掉」= 该角色不可再被分配，但预留代码原样保留。
+ROLES = (ROLE_USER, ROLE_ADMIN, ROLE_AUDITOR)
+
 ROLE_LABELS = {
     ROLE_USER: '普通用户',
     ROLE_ADMIN: '管理员',
-    ROLE_SUPER_ADMIN: '超级管理员',
     ROLE_AUDITOR: '内容审核员',
-    ROLE_USER_ADMIN: '用户管理员',
-    ROLE_MODULE_ADMIN: '模块管理员',
-    ROLE_MODERATOR: '版主',
 }
-#: 当前具备后台访问权限的角色集合（后续扩展只需改这里）
-ADMIN_ROLES = (ROLE_ADMIN, ROLE_SUPER_ADMIN, ROLE_AUDITOR,
-               ROLE_USER_ADMIN, ROLE_MODULE_ADMIN, ROLE_MODERATOR)
+
+# ---------------------------------------------------------------------------
+# 【预留角色 · 未启用】以后需要时把名字加回上面的 ROLES 即可启用
+#
+# 启用步骤（三步，不需要改数据库）：
+#   1. 把 ROLE_XXX 加进 ROLES 与 ROLE_LABELS 与 ADMIN_ROLES；
+#   2. 在下方 ROLE_PERMISSIONS 里给它分配能力（已预置初稿）；
+#   3. 前端无需改动 —— 角色下拉框与菜单都由后端下发。
+#
+# 三者当前都**没有任何账号**，且不在 ROLES 里，因此不可能被分配。
+# ---------------------------------------------------------------------------
+# ROLE_USER_ADMIN = 'user_admin'        # 用户管理员：只管用户，不碰内容
+# ROLE_MODULE_ADMIN = 'module_admin'    # 模块管理员：只管模块配置
+# ROLE_MODERATOR = 'moderator'          # 版主：类似审核员，另加举报处理权重
+
+#: 预留角色的中文名（启用时合并进 ROLE_LABELS）
+RESERVED_ROLE_LABELS = {
+    'user_admin': '用户管理员',
+    'module_admin': '模块管理员',
+    'moderator': '版主',
+}
+
+#: 具备后台访问权限的角色集合（= 「能不能进后台」，不含普通用户）
+ADMIN_ROLES = (ROLE_ADMIN, ROLE_AUDITOR)
+
+#: 真正的管理员（最高级）。
+#: 用途：只有管理员的帖子免审核、只有管理员能改他人正文、
+#: 只有管理员不受"后台角色账号保护"约束。
+TRUE_ADMIN_ROLES = (ROLE_ADMIN,)
+
+# ---------------------------------------------------------------------------
+# 后台能力（RBAC 的最小实现：角色 → 能力集合）
+#
+# 为什么要有这一层：`ADMIN_ROLES` 只回答"能不能进后台"，回答不了"进去能做什么"。
+# 早期只有 user / admin 两级时两者等价，引入 auditor 后必须拆开，
+# 否则审核员会直接拿到全部管理员权限（详见 docs/USER_FIELDS.md）。
+#
+# 新增角色 / 调整权限只改这张表，不需要动任何视图代码。
+# ---------------------------------------------------------------------------
+CAP_ALL = '*'                       # 通配：管理员持有，自动覆盖以后新增的能力
+
+CAP_DASHBOARD_VIEW = 'dashboard.view'
+CAP_POST_AUDIT = 'post.audit'       # 审核帖子（通过 / 拒绝）
+CAP_POST_VIEW = 'post.view'         # 查看内容列表 / 详情
+CAP_POST_MANAGE = 'post.manage'     # 删帖 / 置顶 / 改业务状态 / 编辑他人正文
+CAP_COMMENT_VIEW = 'comment.view'
+CAP_COMMENT_MANAGE = 'comment.manage'   # 删除评论（物理删除）
+CAP_USER_VIEW = 'user.view'         # 用户列表（能搜到人即可，支撑封禁操作）
+CAP_USER_DETAIL = 'user.detail'     # 用户详情 / 发帖记录 / 登录与操作日志（敏感明细）
+CAP_USER_MANAGE = 'user.manage'     # 封禁 / 解封 / 重置密码 / 备注 / 建号
+CAP_USER_ROLE = 'user.role'         # 调整角色（任命审核员）；管理员专有，审核员没有
+CAP_ADMIN_HANDOVER = 'admin.handover'   # 管理员移交（系统只允许一个管理员）
+CAP_MODULE_MANAGE = 'module.manage'
+CAP_LOG_VIEW = 'log.view'
+CAP_TRASH_VIEW = 'trash.view'
+CAP_TRASH_MANAGE = 'trash.manage'   # 还原 / 彻底删除 / 清理
+CAP_REPORT_HANDLE = 'report.handle'
+CAP_CONFIG_MANAGE = 'config.manage'
+CAP_MEDIA_CLEAN = 'media.clean'     # 清理磁盘孤儿文件（破坏性）
+
+#: 角色 → 能力集合。审核员按需求「管理普通用户 + 管内容，但不碰系统结构」收窄。
+ROLE_PERMISSIONS = {
+    # 管理员 = 最高等级，持通配能力。
+    # 用通配而不是逐项列举：以后新增能力会自动覆盖到管理员，不会漏。
+    ROLE_ADMIN: {CAP_ALL},
+    # 内容审核员：审核台 + 内容管理 + 评论管理 + 举报处理 + 概览 + 用户列表 + 封禁普通用户；
+    # 明确不给：模块管理、系统配置、日志、回收站、媒体清理、改角色、重置密码、
+    #           看用户详情 / 发帖记录（需求原文："不可以重置密码、看详情与发帖记录"）。
+    ROLE_AUDITOR: {
+        CAP_DASHBOARD_VIEW, CAP_POST_AUDIT, CAP_POST_VIEW, CAP_POST_MANAGE,
+        CAP_COMMENT_VIEW, CAP_COMMENT_MANAGE,
+        CAP_USER_VIEW, CAP_USER_MANAGE,
+        CAP_REPORT_HANDLE,
+    },
+    ROLE_USER: set(),
+    # ------------------------------------------------------------------
+    # 【预留角色 · 未启用】能力初稿先放这里，启用时把它加进 ROLES / ROLE_LABELS /
+    # ADMIN_ROLES 即可生效（键名与上面 RESERVED_ROLE_LABELS 对应）。
+    # 注意：角色不在 ROLES 里就无法被分配，所以这几项现在是"放着不生效"。
+    # ------------------------------------------------------------------
+    'user_admin': {CAP_DASHBOARD_VIEW, CAP_USER_VIEW, CAP_USER_MANAGE, CAP_LOG_VIEW},
+    'module_admin': {CAP_DASHBOARD_VIEW, CAP_POST_AUDIT, CAP_POST_VIEW, CAP_MODULE_MANAGE},
+    'moderator': {CAP_DASHBOARD_VIEW, CAP_POST_AUDIT, CAP_POST_VIEW,
+                  CAP_COMMENT_VIEW, CAP_COMMENT_MANAGE, CAP_REPORT_HANDLE},
+}
+
+#: 中文字典：能力 → 名称（下发给前端做菜单与按钮渲染）
+CAPABILITY_LABELS = {
+    CAP_DASHBOARD_VIEW: '查看概览',
+    CAP_POST_AUDIT: '审核内容',
+    CAP_POST_VIEW: '查看内容',
+    CAP_POST_MANAGE: '管理内容',
+    CAP_COMMENT_VIEW: '查看评论',
+    CAP_COMMENT_MANAGE: '删除评论',
+    CAP_USER_VIEW: '查看用户',
+    CAP_USER_DETAIL: '查看用户明细',
+    CAP_USER_MANAGE: '管理用户',
+    CAP_USER_ROLE: '调整角色',
+    CAP_ADMIN_HANDOVER: '管理员移交',
+    CAP_MODULE_MANAGE: '模块管理',
+    CAP_LOG_VIEW: '查看日志',
+    CAP_TRASH_VIEW: '查看回收站',
+    CAP_TRASH_MANAGE: '回收站管理',
+    CAP_REPORT_HANDLE: '处理举报',
+    CAP_CONFIG_MANAGE: '系统配置',
+    CAP_MEDIA_CLEAN: '媒体清理',
+}
+
+
+def role_capabilities(role):
+    """取某角色的能力集合（未知角色回落到空集，安全默认）。"""
+    return set(ROLE_PERMISSIONS.get(role, set()))
+
+
+def has_capability(role, capability):
+    """判断角色是否具备某项能力。"""
+    caps = ROLE_PERMISSIONS.get(role)
+    if not caps:
+        return False
+    return CAP_ALL in caps or capability in caps
+
+
+def capabilities_of(role):
+    """把角色能力展开成具体清单（通配展开为全部能力，便于前端渲染）。"""
+    caps = ROLE_PERMISSIONS.get(role) or set()
+    if CAP_ALL in caps:
+        return sorted(c for c in CAPABILITY_LABELS)
+    return sorted(caps)
+
+
+# ---------------------------------------------------------------------------
+# 审核指派（管理员指定审核员；审核员可自助认领）
+# ---------------------------------------------------------------------------
+#: 认领后的自动退回时长（小时）：超时未审核自动退回公共池，避免帖子卡在某人名下
+ASSIGNMENT_CLAIM_TTL_HOURS = 24
+
+#: 审核流水动作
+AUDIT_ACTION_ASSIGN = 'assign'      # 管理员指派 / 改派
+AUDIT_ACTION_CLAIM = 'claim'        # 审核员自助认领
+AUDIT_ACTION_RELEASE = 'release'    # 放弃认领 / 超时自动退回
+AUDIT_ACTION_APPROVE = 'approve'    # 审核通过
+AUDIT_ACTION_REJECT = 'reject'      # 审核拒绝
+AUDIT_ACTIONS = (AUDIT_ACTION_ASSIGN, AUDIT_ACTION_CLAIM, AUDIT_ACTION_RELEASE,
+                 AUDIT_ACTION_APPROVE, AUDIT_ACTION_REJECT)
+AUDIT_ACTION_LABELS = {
+    AUDIT_ACTION_ASSIGN: '指派',
+    AUDIT_ACTION_CLAIM: '认领',
+    AUDIT_ACTION_RELEASE: '退回',
+    AUDIT_ACTION_APPROVE: '通过',
+    AUDIT_ACTION_REJECT: '拒绝',
+}
+#: 指派来源
+ASSIGN_SOURCE_ADMIN = 'admin'
+ASSIGN_SOURCE_SELF = 'self'
 
 STATUS_ACTIVE = 'active'
 STATUS_BANNED = 'banned'

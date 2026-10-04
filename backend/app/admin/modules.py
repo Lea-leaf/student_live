@@ -13,6 +13,7 @@ from flask import Blueprint
 from ..extensions import db
 from ..models import Module, Post
 from ..utils.auth import admin_required, current_user
+from ..utils.constants import CAP_MODULE_MANAGE
 from ..utils.logger import write_operation_log
 from ..utils.response import error, success
 from ..utils.validators import (
@@ -35,7 +36,7 @@ def _get_module_or_404(module_id):
 
 
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def list_modules():
     """全部模块（含禁用），附带各模块帖子数。"""
     modules = Module.query.order_by(Module.sort_order.asc(), Module.id.asc()).all()
@@ -61,7 +62,7 @@ def list_modules():
 
 
 @bp.post('')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def create_module():
     """新增模块（对应需求「其他（后台可新增）」）。
 
@@ -108,7 +109,7 @@ def create_module():
 
 
 @bp.put('/<int:module_id>')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def update_module(module_id):
     """修改模块名称 / 图标 / 简介 / 排序 / 配置 / 允许角色。"""
     import json
@@ -138,7 +139,7 @@ def update_module(module_id):
 
 
 @bp.post('/<int:module_id>/toggle')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def toggle_module(module_id):
     """启用 / 禁用模块。禁用后前端导航不再展示，但历史帖子保留。"""
     try:
@@ -157,7 +158,7 @@ def toggle_module(module_id):
 
 
 @bp.post('/reorder')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def reorder_modules():
     """批量排序：{"items": [{"id": 1, "sort_order": 10}, ...]}"""
     try:
@@ -180,7 +181,7 @@ def reorder_modules():
 
 
 @bp.delete('/<int:module_id>')
-@admin_required
+@admin_required(capability=CAP_MODULE_MANAGE)
 def delete_module(module_id):
     """删除模块。
 

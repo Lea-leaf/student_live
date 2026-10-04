@@ -104,6 +104,12 @@ export const API = {
     userMedia: (id) => `/admin/users/${id}/media`,
     batchBan: `/admin/users/batch/ban`,
 
+    // ---- 管理员移交（系统只允许一个管理员）----
+    handover: `/admin/handover`,
+    handoverStatus: `/admin/handover/status`,
+    handoverCancel: `/admin/handover/cancel`,
+    handoverFinalize: `/admin/handover/finalize`,
+
     comments: '/admin/comments',
     commentStats: '/admin/comments/stats',
     commentDelete: (id) => `/admin/comments/${id}`,
@@ -117,6 +123,12 @@ export const API = {
     postPending: `/admin/posts/pending`,
     postBatchAudit: `/admin/posts/batch/audit`,
     postSummary: `/admin/posts/stats/summary`,
+    // ---- 审核指派 / 认领（管理员指定审核员，审核员可自助认领）----
+    postAssign: (id) => `/admin/posts/${id}/assign`,
+    postClaim: (id) => `/admin/posts/${id}/claim`,
+    postRelease: (id) => `/admin/posts/${id}/release`,
+    postAuditLogs: (id) => `/admin/posts/${id}/audit-logs`,
+    auditAssignees: `/admin/posts/audit-assignees`,
 
     modules: `/admin/modules`,
     moduleUpdate: (id) => `/admin/modules/${id}`,

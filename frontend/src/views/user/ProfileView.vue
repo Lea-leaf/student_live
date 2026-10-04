@@ -99,7 +99,9 @@ async function savePassword() {
           </el-avatar>
           <h3 class="slp-mt-8">{{ user.display_name }}</h3>
           <p class="slp-text-sub">学号：{{ user.student_id }}</p>
-          <el-tag :type="user.is_admin ? 'danger' : 'info'">{{ user.role_label }}</el-tag>
+          <el-tag :type="user.is_admin ? 'danger' : (user.is_staff ? 'warning' : 'info')">
+            {{ user.role_label }}
+          </el-tag>
           <el-descriptions class="slp-mt-16" :column="1" border size="small">
             <el-descriptions-item label="账号状态">
               <el-tag :type="user.status === 'active' ? 'success' : 'danger'" size="small">
@@ -112,13 +114,14 @@ async function savePassword() {
             <el-descriptions-item label="发布数量">{{ user.post_count || 0 }}</el-descriptions-item>
           </el-descriptions>
 
+          <!-- 后台入口：管理员 / 审核员都能进，落地页由 /admin 守卫按能力决定 -->
           <el-button
-            v-if="user.is_admin"
+            v-if="user.is_staff"
             class="slp-mt-16"
             type="primary"
             plain
             style="width: 100%"
-            @click="router.push({ name: 'admin-dashboard' })"
+            @click="router.push('/admin')"
           >
             进入管理后台
           </el-button>

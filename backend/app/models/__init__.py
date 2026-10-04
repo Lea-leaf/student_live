@@ -5,7 +5,7 @@ from .base import BaseModel, paginate
 from .interaction import Comment, Favorite, Message, Notification, Report
 from .like import CommentLike, PostLike
 from .module import Module, default_modules
-from .post import Post
+from .post import Post, PostAuditLog
 from .system import AdminModuleAccess, LoginLog, OperationLog, SystemConfig, UploadFile
 from .user import User
 
@@ -14,6 +14,7 @@ __all__ = [
     'paginate',
     'User',
     'Post',
+    'PostAuditLog',
     'Module',
     'default_modules',
     'Comment',

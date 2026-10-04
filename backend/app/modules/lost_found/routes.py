@@ -103,8 +103,9 @@ def list_posts():
             # 我的发布：包含待审核 / 已拒绝 / 已关闭，且包含已软删除的？
             # 软删除不进「我的发布」，但会出现在回收站提示里（由 detail 接口返回提示）
             query = query.filter(Post.user_id == user.id, Post.is_deleted.is_(False))
-        elif show_all and user and user.is_admin:
-            # 管理员总览：含软删除以外的全部
+        elif show_all and user and user.is_staff:
+            # 后台角色总览（含待审、未删）：管理员与审核员都能用，
+            # 但普通用户的列表接口仍然只返回已通过审核的内容。
             query = query.filter(Post.is_deleted.is_(False))
         else:
             query = query.filter(
@@ -180,13 +181,14 @@ def post_detail(post_id):
                 CODE_POST_CLOSED,
             )
 
-        # 浏览量：作者本人与管理员查看不计数
-        if not user or (post.user_id != user.id and not user.is_admin):
+        # 浏览量：作者本人与后台角色（管理员 / 审核员）查看不计数
+        if not user or (post.user_id != user.id and not user.is_staff):
             svc.bump_view(post)
 
         data = post.to_dict()
         data['can_edit'] = svc.can_edit(post, user)
-        data['can_audit'] = bool(user and user.is_admin and post.audit_status == 'pending')
+        # 能否在此页直接审核：交给领域服务判断（含禁止自审、指派归属）
+        data['can_audit'] = bool(user and post.is_auditable_by(user))
         # 联系方式公开可见（需求明确要求），此处显式标注便于前端提示风险
         data['contact_public'] = True
         # 点赞 / 收藏与作者标记：详情页据此直接渲染按钮状态，少发两个 check 请求

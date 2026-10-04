@@ -20,8 +20,19 @@ export const useUserStore = defineStore('user', {
   getters: {
     /** 是否已登录 */
     isLogin: (state) => !!state.user && !!getToken(),
-    /** 是否管理员 */
-    isAdmin: (state) => !!(state.user && state.user.is_admin),
+    /**
+     * 是否具备后台访问权限（管理员 / 审核员 / 版主都能进后台）。
+     * ⚠️ 它**不等于**"是管理员" —— 权限判断请用 can(capability)。
+     */
+    isAdmin: (state) => !!(state.user && state.user.is_staff),
+    /** 是否为真正的管理员（最高等级；不含审核员等受限后台角色） */
+    isTrueAdmin: (state) => !!(state.user && state.user.is_admin),
+    /** 身份标识：staff=后台角色，user=普通用户（用于徽章展示） */
+    identity: (state) => (state.user ? state.user.identity || 'user' : 'user'),
+    /** 身份中文名（管理员 / 内容审核员 / 普通用户） */
+    roleLabel: (state) => (state.user ? state.user.role_label || '' : ''),
+    /** 当前账号的能力清单（后端下发，前端只用于渲染，不作为安全边界） */
+    capabilities: (state) => (state.user && state.user.capabilities) || [],
     /** 展示名 */
     displayName: (state) => (state.user ? state.user.display_name || state.user.nickname || state.user.student_id : '游客'),
     /** 头像 */
@@ -31,6 +42,15 @@ export const useUserStore = defineStore('user', {
   },
 
   actions: {
+    /**
+     * 是否具备某项后台能力。
+     * 用法：`userStore.can('post.audit')`、`userStore.can('config.manage')`。
+     * 超级管理员由后端展开为全部能力，因此这里不需要特判。
+     */
+    can(capability) {
+      return this.capabilities.includes(capability)
+    },
+
     /** 登录 */
     async login(payload) {
       this.logging = true

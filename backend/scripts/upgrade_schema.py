@@ -21,6 +21,11 @@
     4. upload_files+ owner_type / owner_id         通用关联（评论/私信的媒体不再算孤儿）
     5. post_likes / comment_likes                  两张点赞表
     6. 回填：comments.root_id（顶级评论指向自己）、upload_files.owner_*（按 post_id 推导）
+
+后续升级（对应「审核员与审核指派」，见 docs/USER_FIELDS.md）：
+    7. posts       + assignee_id / assigned_by / assigned_at / assignment_expires_at
+    8. post_audit_logs                             审核流水表（指派/认领/退回/通过/拒绝）
+    9. 两个索引：ix_posts_audit_assignee、ix_post_audit_logs_post_action
 """
 
 import argparse
@@ -38,6 +43,20 @@ from app.extensions import db  # noqa: E402
 NEW_COLUMNS = {
     'posts': [
         ('like_count', 'INTEGER NOT NULL DEFAULT 0'),
+        # ---- 审核指派（管理员指定审核员；审核员可自助认领）----
+        ('assignee_id', 'INTEGER'),
+        ('assigned_by', 'INTEGER'),
+        ('assigned_at', 'DATETIME'),
+        ('assignment_expires_at', 'DATETIME'),
+    ],
+    'users': [
+        # ---- 管理员移交（系统只允许一个管理员，换人走两阶段流程）----
+        ('handover_to_id', 'INTEGER'),
+        ('handover_at', 'DATETIME'),
+        ('handover_effective_at', 'DATETIME'),
+        ('handover_freeze_at', 'DATETIME'),
+        #: 冻结前的原角色：冻结期按它授权（审核员继续审核），撤销时按它恢复
+        ('handover_prev_role', 'VARCHAR(32)'),
     ],
     'comments': [
         ('media', 'TEXT'),
@@ -58,6 +77,9 @@ NEW_COLUMNS = {
     ],
 }
 
+#: 需要新增的表（由 db.create_all() 建，这里只负责报告与计数）
+NEW_TABLES = ('post_likes', 'comment_likes', 'post_audit_logs')
+
 #: 需要新增的索引：[表名, 索引名, 列]
 NEW_INDEXES = [
     ('comments', 'ix_comments_root_id', 'root_id'),
@@ -67,8 +89,12 @@ NEW_INDEXES = [
     ('upload_files', 'ix_upload_files_owner_type', 'owner_type'),
     ('upload_files', 'ix_upload_files_owner_id', 'owner_id'),
     ('upload_files', 'ix_upload_owner', 'owner_type, owner_id'),
+    # ---- 审核指派 ----
+    # 注意：posts.assignee_id / assignment_expires_at 与 post_audit_logs 的单列索引
+    # 由模型里的 index=True 在 db.create_all() 时自动建立，这里只列模型未声明的复合索引。
+    ('posts', 'ix_posts_audit_assignee', 'audit_status, assignee_id'),
+    ('post_audit_logs', 'ix_post_audit_logs_post_action', 'post_id, action'),
 ]
-
 
 def table_names():
     return set(inspect(db.engine).get_table_names())
@@ -117,9 +143,9 @@ def main():
                     db.session.commit()
                 added_columns += 1
 
-        # ---- 2. 建缺失的表（点赞表等）----
-        print('[2] 新建缺失的表（点赞表）')
-        expected = {'post_likes', 'comment_likes'}
+        # ---- 2. 建缺失的表（点赞表、审核流水表）----
+        print('[2] 新建缺失的表（点赞表 / 审核流水表）')
+        expected = set(NEW_TABLES)
         missing = expected - existing_tables
         if missing:
             for name in sorted(missing):
@@ -128,7 +154,7 @@ def main():
                 db.create_all()  # 只建缺失的表，已存在的表不受影响
             added_tables = len(missing)
         else:
-            print('    post_likes / comment_likes: 已存在，跳过')
+            print('    ' + ' / '.join(sorted(expected)) + ': 已存在，跳过')
 
         # ---- 3. 补索引 ----
         print('[3] 补齐缺失的索引')

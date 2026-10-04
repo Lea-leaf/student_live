@@ -61,7 +61,7 @@ erDiagram
         DATETIME created_at not_null
         DATETIME updated_at not_null
     }
-    %% 用户（学生 / 管理员）
+    %% 用户（普通用户 / 内容审核员 / 管理员）
     users {
         VARCHAR username not_null
         VARCHAR password_hash not_null
@@ -80,11 +80,16 @@ erDiagram
         INTEGER login_count not_null
         INTEGER post_count not_null
         VARCHAR remark null
+        INTEGER handover_to_id null
+        DATETIME handover_at null
+        DATETIME handover_effective_at null
+        DATETIME handover_freeze_at null
+        VARCHAR handover_prev_role null
         INTEGER id not_null PK
         DATETIME created_at not_null
         DATETIME updated_at not_null
     }
-    %% 管理员-模块授权（RBAC 预留）
+    %% 管理员-模块授权（RBAC 预留，未启用）
     admin_module_access {
         INTEGER user_id not_null FK
         VARCHAR module_code not_null
@@ -98,10 +103,14 @@ erDiagram
         INTEGER sender_id not_null FK
         INTEGER receiver_id not_null FK
         TEXT content not_null
+        VARCHAR msg_type not_null
+        TEXT media null
         BOOLEAN is_read not_null
         DATETIME read_at null
         VARCHAR conversation_key null
         INTEGER post_id null
+        BOOLEAN sender_deleted not_null
+        BOOLEAN receiver_deleted not_null
         INTEGER id not_null PK
         DATETIME created_at not_null
         DATETIME updated_at not_null
@@ -120,7 +129,7 @@ erDiagram
         DATETIME created_at not_null
         DATETIME updated_at not_null
     }
-    %% 帖子（所有模块统一存储，type 区分模块）
+    %% 帖子（所有模块统一存储，type 区分模块；含审核指派字段）
     posts {
         VARCHAR type not_null
         INTEGER user_id not_null FK
@@ -135,10 +144,15 @@ erDiagram
         VARCHAR audit_remark null
         INTEGER audited_by null
         DATETIME audited_at null
+        INTEGER assignee_id null
+        INTEGER assigned_by null
+        DATETIME assigned_at null
+        DATETIME assignment_expires_at null
         BOOLEAN is_top not_null
         INTEGER view_count not_null
         INTEGER comment_count not_null
         INTEGER favorite_count not_null
+        INTEGER like_count not_null
         BOOLEAN is_deleted not_null
         DATETIME deleted_at null
         INTEGER deleted_by null
@@ -158,6 +172,8 @@ erDiagram
         VARCHAR media_type not_null
         INTEGER size not_null
         INTEGER post_id null
+        VARCHAR owner_type null
+        INTEGER owner_id null
         INTEGER id not_null PK
         DATETIME created_at not_null
         DATETIME updated_at not_null
@@ -167,7 +183,12 @@ erDiagram
         INTEGER post_id not_null FK
         INTEGER user_id not_null FK
         INTEGER parent_id null FK
+        INTEGER root_id null
         TEXT content not_null
+        TEXT media null
+        INTEGER reply_to_user_id null
+        INTEGER like_count not_null
+        INTEGER reply_count not_null
         BOOLEAN is_deleted not_null
         INTEGER id not_null PK
         DATETIME created_at not_null
@@ -175,6 +196,27 @@ erDiagram
     }
     %% 收藏
     favorites {
+        INTEGER user_id not_null FK
+        INTEGER post_id not_null FK
+        INTEGER id not_null PK
+        DATETIME created_at not_null
+        DATETIME updated_at not_null
+    }
+    %% 审核流水（指派 / 认领 / 退回 / 通过 / 拒绝）
+    post_audit_logs {
+        INTEGER post_id not_null FK
+        VARCHAR action not_null
+        INTEGER actor_id null
+        INTEGER assignee_id null
+        VARCHAR assign_source null
+        VARCHAR remark null
+        INTEGER duration_ms null
+        INTEGER id not_null PK
+        DATETIME created_at not_null
+        DATETIME updated_at not_null
+    }
+    %% 帖子点赞
+    post_likes {
         INTEGER user_id not_null FK
         INTEGER post_id not_null FK
         INTEGER id not_null PK
@@ -196,6 +238,14 @@ erDiagram
         DATETIME created_at not_null
         DATETIME updated_at not_null
     }
+    %% 评论点赞
+    comment_likes {
+        INTEGER user_id not_null FK
+        INTEGER comment_id not_null FK
+        INTEGER id not_null PK
+        DATETIME created_at not_null
+        DATETIME updated_at not_null
+    }
 
     %% 关系
     users ||--o{ admin_module_access : "user_id → id"
@@ -207,10 +257,15 @@ erDiagram
     users ||--o{ comments : "user_id → id"
     posts ||--o{ comments : "post_id → id"
     comments ||--o{ comments : "parent_id → id"
-    posts ||--o{ favorites : "post_id → id"
     users ||--o{ favorites : "user_id → id"
-    users ||--o{ reports : "reporter_id → id"
+    posts ||--o{ favorites : "post_id → id"
+    posts ||--o{ post_audit_logs : "post_id → id"
+    posts ||--o{ post_likes : "post_id → id"
+    users ||--o{ post_likes : "user_id → id"
     posts ||--o{ reports : "post_id → id"
+    users ||--o{ reports : "reporter_id → id"
+    users ||--o{ comment_likes : "user_id → id"
+    comments ||--o{ comment_likes : "comment_id → id"
 ```
 
 ## 表清单
@@ -221,12 +276,15 @@ erDiagram
 | `modules` | 功能模块定义（可后台启停 / 排序 / 新增） | 12 |
 | `operation_logs` | 操作日志 | 14 |
 | `system_configs` | 系统配置（键值对） | 9 |
-| `users` | 用户（学生 / 管理员） | 20 |
-| `admin_module_access` | 管理员-模块授权（RBAC 预留） | 6 |
-| `messages` | 站内私信 | 10 |
+| `users` | 用户（普通用户 / 内容审核员 / 管理员） | 25 |
+| `admin_module_access` | 管理员-模块授权（RBAC 预留，未启用） | 6 |
+| `messages` | 站内私信 | 14 |
 | `notifications` | 站内通知 | 11 |
-| `posts` | 帖子（所有模块统一存储，type 区分模块） | 24 |
-| `upload_files` | 上传文件记录 | 12 |
-| `comments` | 帖子评论 | 8 |
+| `posts` | 帖子（所有模块统一存储，type 区分模块；含审核指派字段） | 29 |
+| `upload_files` | 上传文件记录 | 14 |
+| `comments` | 帖子评论 | 13 |
 | `favorites` | 收藏 | 5 |
+| `post_audit_logs` | 审核流水（指派 / 认领 / 退回 / 通过 / 拒绝） | 10 |
+| `post_likes` | 帖子点赞 | 5 |
 | `reports` | 举报 | 12 |
+| `comment_likes` | 评论点赞 | 5 |

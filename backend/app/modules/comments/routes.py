@@ -23,7 +23,7 @@ from ...extensions import db
 from ...models import Comment, CommentLike, Post, User
 from ...models.base import paginate
 from ...utils.auth import current_user, optional_token, token_required
-from ...utils.constants import ADMIN_ROLES, NOTIFY_COMMENT, NOTIFY_MENTION
+from ...utils.constants import NOTIFY_COMMENT, NOTIFY_MENTION
 from ...utils.helpers import current_page_args
 from ...utils.logger import write_operation_log
 from ...utils.notification_service import send
@@ -325,7 +325,11 @@ def delete_comment(comment_id):
         if comment is None:
             raise ValidationError('评论不存在或已删除', 1002)
 
-        is_admin = user.role in ADMIN_ROLES
+        # 这里刻意用 `is_admin`（真正的管理员）而不是"在 ADMIN_ROLES 里"：
+        # 早期写成 `user.role in ADMIN_ROLES`，导致审核员在用户端接口里
+        # 也能走管理员分支 —— 跳过 5 分钟限制、物理删除任意评论。
+        # 审核员要删评论请走管理端 DELETE /admin/comments/<id>（有操作日志与权限校验）。
+        is_admin = user.is_admin
         if is_admin:
             action = 'delete_comment'
             success_msg = '评论已删除'

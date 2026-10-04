@@ -13,6 +13,7 @@ from ..extensions import db
 from ..models import LoginLog, OperationLog
 from ..models.base import paginate
 from ..utils.auth import admin_required
+from ..utils.constants import CAP_LOG_VIEW
 from ..utils.helpers import current_page_args, keyword_arg
 from ..utils.response import success
 from ..utils.validators import ValidationError, as_error, get_int
@@ -21,7 +22,7 @@ bp = Blueprint('admin_logs', __name__, url_prefix='/logs')
 
 
 @bp.get('/operations')
-@admin_required
+@admin_required(capability=CAP_LOG_VIEW)
 def operation_logs():
     """操作日志。
 
@@ -66,7 +67,7 @@ def operation_logs():
 
 
 @bp.get('/logins')
-@admin_required
+@admin_required(capability=CAP_LOG_VIEW)
 def login_logs():
     """登录日志（成功与失败）。参数：success（0/1）、keyword。"""
     try:
@@ -98,7 +99,7 @@ def login_logs():
 
 
 @bp.get('/errors')
-@admin_required
+@admin_required(capability=CAP_LOG_VIEW)
 def error_logs():
     """异常日志（读取 app/logs/error.log 尾部）。
 
@@ -118,7 +119,7 @@ def error_logs():
 
 
 @bp.get('/summary')
-@admin_required
+@admin_required(capability=CAP_LOG_VIEW)
 def logs_summary():
     """日志概览：各类日志总量与今日量。"""
     from datetime import datetime

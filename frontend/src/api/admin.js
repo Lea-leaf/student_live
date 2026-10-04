@@ -29,8 +29,20 @@ export const adminApi = {
     changeRole: (id, data) => request.post(API.admin.userRole(id), data),
     create: (data) => request.post(API.admin.users, data),
     batchBan: (data) => request.post(API.admin.batchBan, data),
-    /** 彻底删除用户（需传 confirm_student_id 二次确认；仅超级管理员） */
+    /** 彻底删除用户（需传 confirm_student_id 二次确认） */
     remove: (id, data) => request.delete(API.admin.userDetail(id), { data })
+  },
+
+  // ---------------- 管理员移交（系统只允许一个管理员）----------------
+  handover: {
+    /** 当前移交状态（发起人 / 接班人视角）+ 可选接任者名单 + 服务器北京时间 */
+    status: () => request.get(API.admin.handoverStatus),
+    /** 发起移交：{ user_id, reason } */
+    start: (data) => request.post(API.admin.handover, data),
+    /** 撤销移交（反悔期 24 小时内） */
+    cancel: (data) => request.post(API.admin.handoverCancel, data || {}),
+    /** 立即结算已到期的移交（演示 / 排障用） */
+    finalize: () => request.post(API.admin.handoverFinalize)
   },
 
   // ---------------- 评论管理 ----------------
@@ -54,7 +66,19 @@ export const adminApi = {
     toggleTop: (id, data) => request.post(API.admin.postTop(id), data || {}),
     update: (id, data) => request.put(API.admin.postDetail(id), data),
     remove: (id) => request.delete(API.admin.postDelete(id)),
-    summary: () => request.get(API.admin.postSummary)
+    summary: () => request.get(API.admin.postSummary),
+
+    // ---- 审核指派 / 认领 ----
+    /** 可指派的审核员名单 + 各自待审数量（仅管理员有内容） */
+    assignees: () => request.get(API.admin.auditAssignees),
+    /** 指派 / 改派 / 收回公共池（assignee_id 传 null 即收回） */
+    assign: (id, data) => request.post(API.admin.postAssign(id), data),
+    /** 审核员自助认领（先到先得，被抢走时后端返回 4005） */
+    claim: (id) => request.post(API.admin.postClaim(id)),
+    /** 放弃认领，退回公共池 */
+    release: (id, data) => request.post(API.admin.postRelease(id), data || {}),
+    /** 该帖子的审核流水（指派 / 认领 / 退回 / 通过 / 拒绝） */
+    auditLogs: (id) => request.get(API.admin.postAuditLogs(id))
   },
 
   // ---------------- 模块管理 ----------------

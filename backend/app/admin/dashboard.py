@@ -12,7 +12,13 @@ from flask import Blueprint
 from ..extensions import db
 from ..models import Comment, LoginLog, Module, Post, Report, User
 from ..utils.auth import admin_required
-from ..utils.constants import AUDIT_PENDING, REPORT_PENDING, STATUS_BANNED
+from ..utils.constants import (
+    AUDIT_PENDING,
+    CAP_DASHBOARD_VIEW,
+    CAP_MEDIA_CLEAN,
+    REPORT_PENDING,
+    STATUS_BANNED,
+)
 from ..utils.logger import write_operation_log
 from ..utils.response import success
 from ..utils.validators import ValidationError, as_error, get_int
@@ -26,7 +32,7 @@ def _today_start():
 
 
 @bp.get('/dashboard/overview')
-@admin_required
+@admin_required(capability=CAP_DASHBOARD_VIEW)
 def overview():
     """统计卡片数据。"""
     today = _today_start()
@@ -49,7 +55,7 @@ def overview():
 
 
 @bp.get('/dashboard/trend')
-@admin_required
+@admin_required(capability=CAP_DASHBOARD_VIEW)
 def trend():
     """近 7 天新增趋势（发帖 / 注册）。
 
@@ -77,7 +83,7 @@ def trend():
 
 
 @bp.get('/dashboard/module-stats')
-@admin_required
+@admin_required(capability=CAP_DASHBOARD_VIEW)
 def module_stats():
     """各模块帖子数量分布。"""
     rows = (
@@ -96,7 +102,7 @@ def module_stats():
 
 
 @bp.get('/dashboard/pending')
-@admin_required
+@admin_required(capability=CAP_DASHBOARD_VIEW)
 def pending_list():
     """最近待审核帖子（首页快捷入口）。"""
     from ..utils.validators import get_int
@@ -112,12 +118,13 @@ def pending_list():
 
 
 @bp.get('/dashboard/media')
-@admin_required
+@admin_required(capability=CAP_MEDIA_CLEAN)
 def media_storage():
-    """媒体存储用量：按用户目录统计磁盘占用。
+    """媒体存储用量：按用户目录统计磁盘占用（系统级信息，仅管理员可见）。
 
     配合「数据按用户分目录存放」的设计，管理员可以在这里看清
     每个用户占了多少空间，也便于发现异常占用。
+    审核员看不到这一页：它暴露全体用户的磁盘路径与占用。
     """
     from ..utils.cleanup import media_orphan_files, unattached_upload_files
     from ..utils.uploads import media_stats
@@ -159,9 +166,9 @@ def media_storage():
 
 
 @bp.post('/dashboard/media/clean')
-@admin_required
+@admin_required(capability=CAP_MEDIA_CLEAN)
 def clean_media():
-    """清理未引用媒体：未提交上传 + 磁盘孤儿文件。
+    """清理未引用媒体：未提交上传 + 磁盘孤儿文件（**破坏性，仅管理员**）。
 
     查询参数 / JSON 字段 `hours`：未提交上传的保留时长，默认 24 小时。
     """

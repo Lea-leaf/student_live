@@ -10,7 +10,7 @@ from flask import Blueprint
 
 from ..utils.auth import admin_required, current_user
 from ..utils.config_service import clear_cache, get_group, init_default_configs, set_configs
-from ..utils.constants import DEFAULT_CONFIGS
+from ..utils.constants import CAP_CONFIG_MANAGE, DEFAULT_CONFIGS
 from ..utils.logger import write_operation_log
 from ..utils.response import success
 from ..utils.validators import ValidationError, as_error, get_json
@@ -19,7 +19,7 @@ bp = Blueprint('admin_configs', __name__, url_prefix='/configs')
 
 
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_CONFIG_MANAGE)
 def list_configs():
     """配置列表（按分组）。参数：group。"""
     rows = get_group()
@@ -30,7 +30,7 @@ def list_configs():
 
 
 @bp.put('')
-@admin_required
+@admin_required(capability=CAP_CONFIG_MANAGE)
 def update_configs():
     """批量修改配置。
 
@@ -59,7 +59,7 @@ def update_configs():
 
 
 @bp.post('/reset')
-@admin_required
+@admin_required(capability=CAP_CONFIG_MANAGE)
 def reset_configs():
     """恢复默认：把 DEFAULT_CONFIGS 重新写入（已有值会被覆盖）。"""
     try:
@@ -75,7 +75,7 @@ def reset_configs():
 
 
 @bp.post('/init')
-@admin_required
+@admin_required(capability=CAP_CONFIG_MANAGE)
 def init_configs():
     """补齐缺失的配置项（部署后第一次调用）。"""
     created = init_default_configs()

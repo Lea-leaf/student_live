@@ -16,6 +16,7 @@ from ..models import Post, UploadFile, User
 from ..models.base import paginate
 from ..utils.auth import admin_required
 from ..utils.config_service import get_config, get_config_int
+from ..utils.constants import CAP_TRASH_MANAGE, CAP_TRASH_VIEW
 from ..utils.helpers import current_page_args, keyword_arg
 from ..utils.logger import write_operation_log
 from ..utils.notification_service import send
@@ -27,7 +28,7 @@ bp = Blueprint('admin_trash', __name__, url_prefix='/trash')
 
 
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_TRASH_VIEW)
 def list_trash():
     """回收站列表（按删除时间倒序）。参数：page / size / type / keyword。"""
     try:
@@ -55,7 +56,7 @@ def list_trash():
 
 
 @bp.post('/<int:post_id>/restore')
-@admin_required
+@admin_required(capability=CAP_TRASH_MANAGE)
 def restore_post(post_id):
     """从回收站恢复。"""
     try:
@@ -73,7 +74,7 @@ def restore_post(post_id):
 
 
 @bp.delete('/<int:post_id>')
-@admin_required
+@admin_required(capability=CAP_TRASH_MANAGE)
 def purge_post(post_id):
     """彻底删除（不可恢复）。
 
@@ -97,7 +98,7 @@ def purge_post(post_id):
 
 
 @bp.post('/batch/restore')
-@admin_required
+@admin_required(capability=CAP_TRASH_MANAGE)
 def batch_restore():
     """批量恢复：{"post_ids": [1,2]}"""
     try:
@@ -120,7 +121,7 @@ def batch_restore():
 
 
 @bp.post('/batch/purge')
-@admin_required
+@admin_required(capability=CAP_TRASH_MANAGE)
 def batch_purge():
     """批量彻底删除：{"post_ids": [1,2]}
 
@@ -151,7 +152,7 @@ def batch_purge():
 
 
 @bp.post('/cleanup')
-@admin_required
+@admin_required(capability=CAP_TRASH_MANAGE)
 def cleanup():
     """按保留条数立即清理回收站。
 
@@ -175,7 +176,7 @@ def cleanup():
 
 
 @bp.get('/stats')
-@admin_required
+@admin_required(capability=CAP_TRASH_VIEW)
 def trash_stats():
     """回收站概览。"""
     total = Post.query.filter(Post.is_deleted.is_(True)).count()

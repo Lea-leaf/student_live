@@ -16,7 +16,7 @@ from app import create_app  # noqa: E402
 from app.extensions import db  # noqa: E402
 from app.models import Module, User, default_modules  # noqa: E402
 from app.utils.config_service import init_default_configs  # noqa: E402
-from app.utils.constants import ROLE_ADMIN, ROLE_USER  # noqa: E402
+from app.utils.constants import ROLE_ADMIN, ROLE_AUDITOR, ROLE_USER  # noqa: E402
 
 
 @pytest.fixture()
@@ -68,6 +68,18 @@ def admin(app):
     return _create_user(app, 'admin', 'admin123', role=ROLE_ADMIN, nickname='管理员')
 
 
+@pytest.fixture()
+def auditor(app):
+    """内容审核员账号（受限后台角色）。"""
+    return _create_user(app, 'auditor', 'audit123', role=ROLE_AUDITOR, nickname='审核员')
+
+
+@pytest.fixture()
+def auditor2(app):
+    """第二个审核员（用于「先到先得」认领竞争测试）。"""
+    return _create_user(app, 'auditor2', 'audit123', role=ROLE_AUDITOR, nickname='审核员二号')
+
+
 def login(client, student_id, password):
     """登录并返回 token。"""
     response = client.post('/api/v1/auth/login', json={'student_id': student_id, 'password': password})
@@ -93,6 +105,16 @@ def student2_token(client, student2):
 @pytest.fixture()
 def admin_token(client, admin):
     return login(client, 'admin', 'admin123')
+
+
+@pytest.fixture()
+def auditor_token(client, auditor):
+    return login(client, 'auditor', 'audit123')
+
+
+@pytest.fixture()
+def auditor2_token(client, auditor2):
+    return login(client, 'auditor2', 'audit123')
 
 
 @pytest.fixture()

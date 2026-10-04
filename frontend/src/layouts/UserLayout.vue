@@ -97,6 +97,11 @@ async function handleCommand(command) {
     router.push({ name: 'home' })
     return
   }
+  // 后台入口不写死页面名：由 /admin 的守卫按能力落到第一个可访问页面
+  if (command === 'admin') {
+    router.push('/admin')
+    return
+  }
   router.push({ name: command })
 }
 
@@ -165,8 +170,9 @@ const noticeText = computed(() => appStore.config.security_notice_text || '')
                   <el-dropdown-item command="my-posts">我的发布</el-dropdown-item>
                   <el-dropdown-item command="my-favorites">我的收藏</el-dropdown-item>
                   <el-dropdown-item command="messages">我的私信</el-dropdown-item>
-                  <el-dropdown-item v-if="userStore.isAdmin" command="admin-dashboard" divided>
-                    管理后台
+                  <!-- 后台入口：管理员与审核员都能看到（进去后按能力落到各自首页） -->
+                  <el-dropdown-item v-if="userStore.isAdmin" command="admin" divided>
+                    管理后台（{{ userStore.roleLabel }}）
                   </el-dropdown-item>
                   <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
                 </el-dropdown-menu>

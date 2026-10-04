@@ -1,11 +1,17 @@
 <script setup>
 /**
  * 管理端 - 用户详情。
- * 需求：详情、查看发帖记录、封禁/解封、重置密码、角色调整（RBAC 预留）。
+ * 需求：详情、查看发帖记录、封禁/解封、重置密码、角色调整。
+ *
+ * 权限分层（按 `capabilities` 显示，避免"点了才 403"）：
+ * - **管理员**（`user.detail`）：全部区块 + 重置密码 + 调整角色；
+ * - **审核员**（只有 `user.view`）：基础资料与统计、封禁 / 解封；
+ *   发帖记录与登录日志区块不显示（后端同样拒绝），邮箱手机号也不下发。
  */
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown } from '@element-plus/icons-vue'
 
 import adminApi from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -24,21 +30,39 @@ const stats = ref({})
 const posts = reactive({ list: [], total: 0, page: 1, size: 10 })
 const logs = reactive({ login_logs: [], operation_logs: [], login_total: 0 })
 
+/** 能否查看敏感明细（发帖记录 / 登录日志）。审核员只有 user.view，看不到这些区块。 */
+const canSeeDetail = computed(() => userStore.can('user.detail'))
+
+/**
+ * 可分配的角色：排除 `admin`。
+ * 系统只允许一个管理员，管理员身份只能通过「管理员移交」获得 ——
+ * 所以这里不给"任命管理员"的选项，避免点了一个必定失败的菜单。
+ */
+const assignableRoles = computed(() =>
+  (appStore.enums.role || []).filter((item) => item.value !== 'admin')
+)
+
 onMounted(loadAll)
 
 async function loadAll() {
   loading.value = true
   try {
-    const [detail, postData, logData] = await Promise.all([
-      adminApi.users.detail(userId),
-      adminApi.users.posts(userId, { page: posts.page, size: posts.size }),
-      adminApi.users.logs(userId, { page: 1, size: 10 })
-    ])
+    // 详情接口只需 user.view（审核员也有），但要按下发能力决定是否带敏感字段
+    const detail = await adminApi.users.detail(userId)
     user.value = detail.user
     stats.value = detail.stats
-    posts.list = postData.list || []
-    posts.total = postData.total || 0
-    Object.assign(logs, logData)
+
+    // 发帖记录 / 登录与操作日志需要 user.detail（仅管理员）
+    // ⚠️ 必须按能力跳过，否则审核员打开本页会白挨两个 403 提示
+    if (canSeeDetail.value) {
+      const [postData, logData] = await Promise.all([
+        adminApi.users.posts(userId, { page: posts.page, size: posts.size }),
+        adminApi.users.logs(userId, { page: 1, size: 10 })
+      ])
+      posts.list = postData.list || []
+      posts.total = postData.total || 0
+      Object.assign(logs, logData)
+    }
   } catch (error) {
     // 拦截器已提示
   } finally {
@@ -120,7 +144,7 @@ function goPost(post) {
             <el-avatar :size="64" :src="user.avatar">{{ (user.display_name || '?').slice(0, 1) }}</el-avatar>
             <h3 class="slp-mt-8">{{ user.display_name }}</h3>
             <el-space>
-              <el-tag :type="user.is_admin ? 'danger' : 'info'">{{ user.role_label }}</el-tag>
+              <el-tag :type="user.is_admin ? 'danger' : (user.is_staff ? 'warning' : 'info')">{{ user.role_label }}</el-tag>
               <el-tag :type="statusTagType(user.status)">{{ user.status_label }}</el-tag>
             </el-space>
           </div>
@@ -140,17 +164,31 @@ function goPost(post) {
           <div class="slp-toolbar slp-mt-16">
             <el-button v-if="user.status === 'active'" type="danger" plain @click="ban">封禁</el-button>
             <el-button v-else type="success" plain @click="unban">解封</el-button>
-            <el-button type="warning" plain @click="resetPassword">重置密码</el-button>
-            <el-dropdown v-if="userStore.user?.role === 'admin' || userStore.user?.role === 'super_admin'">
-              <el-button plain>调整角色</el-button>
+            <!-- 重置密码：后端要求 user.detail 能力，审核员没有，按钮也不显示 -->
+            <el-button
+              v-if="userStore.can('user.detail')"
+              type="warning"
+              plain
+              @click="resetPassword"
+            >重置密码</el-button>
+            <!--
+              调整角色：管理员专有能力（`user.role`），审核员看不到，后端同样会拦。
+              ⚠️ 下拉里**不列「管理员」** —— 系统只允许一个管理员，
+              管理员身份只能通过「管理员移交」获得（在用户管理页右上角）。
+              不该显示一个"点了必定被拒"的选项。
+            -->
+            <el-dropdown v-if="userStore.can('user.role') && assignableRoles.length">
+              <el-button plain>调整角色<el-icon><ArrowDown /></el-icon></el-button>
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item
-                    v-for="item in appStore.enums.role"
+                    v-for="item in assignableRoles"
                     :key="item.value"
+                    :disabled="item.value === user.role"
                     @click="changeRole(item.value)"
                   >
                     {{ item.label }}
+                    <span v-if="item.value === user.role" class="slp-text-sub">（当前）</span>
                   </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
@@ -170,6 +208,17 @@ function goPost(post) {
       </el-col>
 
       <el-col :xs="24" :md="16">
+        <!-- 发帖记录 / 登录日志 / 操作日志：需要 user.detail，审核员看不到 -->
+        <el-alert
+          v-if="!canSeeDetail"
+          class="slp-mb-16"
+          type="info"
+          show-icon
+          :closable="false"
+          title="你的身份看不到发帖记录与日志"
+          description="这些属于用户敏感明细，仅管理员可查看。你仍可在此封禁 / 解封普通用户。"
+        />
+        <template v-if="canSeeDetail">
         <div class="slp-card">
           <h3 class="slp-mb-16">发帖记录</h3>
           <el-table :data="posts.list" size="small">
@@ -243,6 +292,7 @@ function goPost(post) {
           </el-table>
           <el-empty v-if="!logs.operation_logs.length" description="暂无操作日志" :image-size="60" />
         </div>
+        </template>
       </el-col>
     </el-row>
   </div>

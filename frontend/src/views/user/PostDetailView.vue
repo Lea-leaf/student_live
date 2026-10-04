@@ -39,10 +39,16 @@ const title = computed(() => {
   return post.value.title || post.value.content?.slice(0, 24) || '信息详情'
 })
 
-/** 是否是作者本人（或管理员），可执行状态流转 / 编辑 / 删除 */
+/**
+ * 是否是作者本人（或真正的管理员），可执行状态流转 / 编辑 / 删除。
+ *
+ * ⚠️ 用 `isTrueAdmin` 而不是 `isAdmin`：后者表示"能进后台"（含审核员），
+ * 而审核员在前台**不能**替用户改状态 / 改正文（后端 `can_edit` 同样只放行作者与管理员）。
+ * 审核员的内容处置请走后台「内容管理 / 审核工作台」。
+ */
 const canManage = computed(() => {
   if (!post.value || !userStore.user) return false
-  return post.value.user_id === userStore.user.id || userStore.isAdmin
+  return post.value.user_id === userStore.user.id || userStore.isTrueAdmin
 })
 
 const canClaim = computed(() => post.value && post.value.status === 'ongoing' && canManage.value)

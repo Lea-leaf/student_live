@@ -16,7 +16,8 @@ from flask import Blueprint, request
 from ..extensions import db
 from ..models import Comment, Post, User
 from ..models.base import paginate
-from ..utils.auth import admin_required
+from ..utils.auth import admin_required, current_user
+from ..utils.constants import CAP_COMMENT_MANAGE, CAP_COMMENT_VIEW
 from ..utils.helpers import current_page_args, keyword_arg
 from ..utils.logger import write_operation_log
 from ..utils.response import paginated, success
@@ -26,7 +27,7 @@ bp = Blueprint('admin_comments', __name__, url_prefix='/comments')
 
 
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_COMMENT_VIEW)
 def list_comments():
     """评论列表。
 
@@ -63,7 +64,7 @@ def list_comments():
 
 
 @bp.get('/stats')
-@admin_required
+@admin_required(capability=CAP_COMMENT_VIEW)
 def comment_stats():
     """评论概览。"""
     total = Comment.query.count()
@@ -85,14 +86,17 @@ def comment_stats():
 
 
 @bp.delete('/<int:comment_id>')
-@admin_required
+@admin_required(capability=CAP_COMMENT_MANAGE)
 def delete_comment(comment_id):
-    """管理员删除评论：数据库物理删除（含子回复、点赞、媒体与相关通知）。
+    """删除评论：数据库物理删除（含子回复、点赞、媒体与相关通知）。
 
     兼容旧的 `?purge=1` 参数，但无论是否传参都是物理删除。
     删除前把评论内容、作者、帖子等数据库信息写进操作日志，便于审计。
+    管理员与审核员都可执行（按需求，删评论是审核员的核心职责之一），
+    日志里记录实际操作人的角色便于追溯。
     """
     try:
+        operator = current_user()
         comment = Comment.query.get(comment_id)
         if comment is None:
             raise ValidationError('评论不存在', 1002)
@@ -107,6 +111,7 @@ def delete_comment(comment_id):
             'like_count': comment.like_count,
             'reply_count': comment.reply_count,
             'by_admin': True,
+            'operator_role': operator.role,
         }
         stats = purge_comment(comment)
         detail.update(stats)

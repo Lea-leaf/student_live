@@ -10,9 +10,13 @@ from flask import Blueprint, request
 from ..extensions import db
 from ..models import LoginLog, OperationLog, Post, User
 from ..models.base import paginate
-from ..utils.auth import admin_required, current_user, super_admin_required
+from ..utils.auth import admin_required, current_user
 from ..utils.constants import (
     ADMIN_ROLES,
+    CAP_USER_DETAIL,
+    CAP_USER_MANAGE,
+    CAP_USER_ROLE,
+    CAP_USER_VIEW,
     ROLE_ADMIN,
     ROLE_LABELS,
     ROLE_USER,
@@ -48,8 +52,31 @@ def _get_user_or_404(user_id):
     return user
 
 
+def _guard_target(operator, target, action='操作'):
+    """谁能对谁执行账号处置（封禁 / 解封 / 重置密码 / 删除）。
+
+    规则（收敛成两条）：
+    1. **审核员只能管普通用户** —— 对其他后台角色（审核员、管理员）没有处置权；
+    2. **管理员之间完全平级** —— 可以互相处置（`admin` 就是最高等级，
+       不存在"更高一级"，所以没有"上级才能动下级"这回事）。
+
+    不能对自己操作由各接口单独校验（避免把自己封了 / 删了）。
+
+    历史说明：早期这里写的是「非 super_admin 不能处置管理员」，
+    但 `is_super_admin` 对 admin 本身就返回 True，那个判断恒为假，
+    实际效果是"管理员互相不能动" —— 与"admin 即最高级"的定位自相矛盾。
+    现在随 `super_admin` 档位一起移除了。
+    """
+    if operator.is_admin:
+        return None
+    if target.is_staff:
+        return error(f'审核员不能对其他管理员或审核员执行{action}', CODE_FORBIDDEN,
+                     http_status=403)
+    return None
+
+
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_USER_VIEW)
 def list_users():
     """用户列表。
 
@@ -91,17 +118,26 @@ def list_users():
 
 
 @bp.get('/<int:user_id>')
-@admin_required
+@admin_required(capability=CAP_USER_VIEW)
 def user_detail(user_id):
-    """用户详情 + 发帖统计。"""
+    """用户详情 + 发帖统计。
+
+    权限分层（`with_sensitive`）：
+    - **管理员**（有 `user.detail`）：带邮箱 / 手机号等敏感字段；
+    - **审核员**（只有 `user.view`）：能看基础资料与统计，但**不返回敏感字段** ——
+      与他"不能看用户明细、不能重置密码"的权限边界一致。
+
+    发帖记录 / 登录日志 / 媒体清单仍各自需要 `user.detail`，审核员访问会 403。
+    """
     try:
+        operator = current_user()
         user = _get_user_or_404(user_id)
         post_total = Post.query.filter_by(user_id=user.id).count()
         deleted_total = Post.query.filter_by(user_id=user.id, is_deleted=True).count()
         pending_total = Post.query.filter_by(user_id=user.id, audit_status='pending').count()
         login_count = LoginLog.query.filter_by(user_id=user.id, success=True).count()
         return success({
-            'user': user.to_dict(with_sensitive=True),
+            'user': user.to_dict(with_sensitive=operator.has_capability(CAP_USER_DETAIL)),
             'stats': {
                 'post_total': post_total,
                 'post_deleted': deleted_total,
@@ -114,7 +150,7 @@ def user_detail(user_id):
 
 
 @bp.get('/<int:user_id>/posts')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def user_posts(user_id):
     """查看某用户的发帖记录（含软删除，便于管理员判断）。"""
     try:
@@ -138,9 +174,9 @@ def user_posts(user_id):
 
 
 @bp.post('/<int:user_id>/ban')
-@admin_required
+@admin_required(capability=CAP_USER_MANAGE)
 def ban_user(user_id):
-    """封禁用户。
+    """封禁用户（审核员也可以，但**只能封禁普通用户**）。
 
     请求体：{"reason": "发布违规信息"}
     """
@@ -149,8 +185,9 @@ def ban_user(user_id):
         user = _get_user_or_404(user_id)
         if user.id == operator.id:
             raise ValidationError('不能封禁自己')
-        if user.is_admin and not operator.is_super_admin:
-            return error('只有超级管理员可以封禁管理员账号', CODE_FORBIDDEN, http_status=403)
+        guard = _guard_target(operator, user, '封禁')
+        if guard:
+            return guard
 
         payload = get_json(required=False)
         reason = clean_text(payload.get('reason'), 255, '封禁原因') or '违反平台规范'
@@ -166,11 +203,15 @@ def ban_user(user_id):
 
 
 @bp.post('/<int:user_id>/unban')
-@admin_required
+@admin_required(capability=CAP_USER_MANAGE)
 def unban_user(user_id):
-    """解封用户。"""
+    """解封用户（审核员同样只能解封普通用户）。"""
     try:
+        operator = current_user()
         user = _get_user_or_404(user_id)
+        guard = _guard_target(operator, user, '解封')
+        if guard:
+            return guard
         if user.status != STATUS_BANNED:
             return error('该用户当前未被封禁')
         user.unban()
@@ -183,17 +224,17 @@ def unban_user(user_id):
 
 
 @bp.post('/<int:user_id>/reset-password')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def reset_password(user_id):
-    """重置用户密码。
+    """重置用户密码（**仅管理员**；审核员没有此权限，需求明确排除）。
 
     请求体：{"new_password": "xxxxxx"}  不传则重置为默认密码 123456
     """
     try:
         operator = current_user()
         user = _get_user_or_404(user_id)
-        if user.is_admin and not operator.is_super_admin:
-            return error('只有超级管理员可以重置管理员密码', CODE_FORBIDDEN, http_status=403)
+        if user.id == operator.id:
+            raise ValidationError('请在「个人中心」修改自己的密码，不要用重置功能')
 
         payload = get_json(required=False)
         raw = payload.get('new_password') or DEFAULT_RESET_PASSWORD
@@ -211,18 +252,49 @@ def reset_password(user_id):
 
 
 @bp.post('/<int:user_id>/role')
-@super_admin_required
+@admin_required(capability=CAP_USER_ROLE)
 def change_role(user_id):
-    """调整用户角色（RBAC 预留：未来分级管理员靠这里授权）。"""
+    """调整用户角色（**管理员专有**，这正是「任命审核员」的入口）。
+
+    权限：`user.role` 能力只给管理员 —— 审核员没有（需求原文："没有任命审核员的权利"）。
+
+    约束：
+    - 角色必须是 `ROLES` 里列出的值（预留角色不在其中，因此无法被分配）；
+    - **不能通过这里改自己的角色** —— 管理员把自己降级等于"让出管理员"，
+      那要走「管理员移交」（`/admin/handover`），必须先把权限交给别人；
+    - **不能把别人直接改成管理员** —— 系统只允许一个管理员，换人只能走移交；
+    - 每次变更写操作日志（who 改了谁、从什么改成什么），可追溯。
+    """
     try:
         operator = current_user()
         user = _get_user_or_404(user_id)
         payload = get_json()
         role = (payload.get('role') or '').strip()
         if role not in ROLES:
-            raise ValidationError(f'角色取值非法，可选：{" / ".join(ROLES)}')
-        if user.id == operator.id and role not in ADMIN_ROLES:
-            raise ValidationError('不能取消自己的管理员权限')
+            raise ValidationError(
+                f'角色取值非法，可选：{" / ".join(ROLES)}'
+                '（其余角色为预留未启用，暂不可分配）'
+            )
+
+        if user.id == operator.id:
+            if user.is_admin:
+                raise ValidationError(
+                    '管理员不能直接修改自己的角色。若要让出管理员权限，请使用'
+                    '「管理员移交」：先指定接任者，24 小时内可随时撤销，'
+                    '到期后你才会变为普通用户'
+                )
+            raise ValidationError('不能修改自己的角色')
+
+        if role == ROLE_ADMIN:
+            raise ValidationError(
+                '系统只允许存在一个管理员。如需更换管理员，请使用「管理员移交」功能'
+            )
+
+        if user.is_frozen:
+            raise ValidationError('该账号正处于管理员交接冻结期，请先撤销移交再调整角色')
+        user = _get_user_or_404(user_id)
+        payload = get_json()
+        role = (payload.get('role') or '').strip()
 
         old_role = user.role
         user.role = role
@@ -235,9 +307,9 @@ def change_role(user_id):
 
 
 @bp.post('/<int:user_id>/remark')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def update_remark(user_id):
-    """管理员备注（例如记录沟通情况）。"""
+    """管理员备注（例如记录沟通情况，属敏感明细，审核员不可用）。"""
     try:
         user = _get_user_or_404(user_id)
         payload = get_json()
@@ -249,9 +321,9 @@ def update_remark(user_id):
 
 
 @bp.post('')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def create_user():
-    """管理员直接创建账号（无需验证码，用于导入学生名单）。
+    """管理员直接创建账号（无需验证码，用于导入学生名单；审核员不可用）。
 
     请求体：{"student_id": "...", "password": "...", "nickname": "...", "role": "user"}
     """
@@ -262,9 +334,14 @@ def create_user():
         password = validate_password(payload.get('password'))
         role = (payload.get('role') or ROLE_USER).strip()
         if role not in ROLES:
-            raise ValidationError('角色取值非法')
-        if role in ADMIN_ROLES and not operator.is_super_admin:
-            return error('只有超级管理员可以创建管理员账号', CODE_FORBIDDEN, http_status=403)
+            raise ValidationError(
+                f'角色取值非法，可选：{" / ".join(ROLES)}'
+                '（其余角色为预留未启用，暂不可分配）'
+            )
+        if role == ROLE_ADMIN:
+            raise ValidationError(
+                '系统只允许存在一个管理员。如需更换管理员，请使用「管理员移交」功能'
+            )
         if User.query.filter_by(student_id=student_id).first():
             return error('该学号已存在', 3001)
 
@@ -285,9 +362,12 @@ def create_user():
 
 
 @bp.post('/batch/ban')
-@admin_required
+@admin_required(capability=CAP_USER_MANAGE)
 def batch_ban():
-    """批量封禁：{"user_ids": [1,2,3], "reason": "..."}"""
+    """批量封禁：{"user_ids": [1,2,3], "reason": "..."}
+
+    审核员可用，但批量操作里同样跳过所有后台角色（只能封普通用户）。
+    """
     try:
         operator = current_user()
         payload = get_json()
@@ -301,24 +381,27 @@ def batch_ban():
         for uid in ids:
             user = User.query.get(uid)
             if not user or user.id == operator.id:
+                # 自己不能被批量封禁（其余无效 ID 一并跳过）
                 skipped.append(uid)
                 continue
-            if user.is_admin and not operator.is_super_admin:
+            if not operator.is_admin and user.is_staff:
+                # 审核员只能封普通用户
                 skipped.append(uid)
                 continue
             user.ban(reason=reason, operator_id=operator.id)
             affected += 1
         db.session.commit()
-        write_operation_log('batch_ban', module='users', detail={'ids': ids, 'affected': affected})
+        write_operation_log('batch_ban', module='users',
+                            detail={'ids': ids, 'affected': affected, 'skipped': skipped})
         return success({'affected': affected, 'skipped': skipped}, msg=f'已封禁 {affected} 个账号')
     except ValidationError as exc:
         return as_error(exc)
 
 
 @bp.get('/<int:user_id>/logs')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def user_logs(user_id):
-    """某用户的操作日志与登录日志（排查用）。"""
+    """某用户的操作日志与登录日志（排查用，含登录 IP，审核员无权查看）。"""
     try:
         user = _get_user_or_404(user_id)
         page, size = current_page_args()
@@ -340,11 +423,12 @@ def user_logs(user_id):
 
 
 @bp.get('/<int:user_id>/media')
-@admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def user_media(user_id):
     """查看某用户的媒体文件清单（数据库记录 + 磁盘实际占用）。
 
     删除用户前先用它确认「要删掉哪些东西」，也让「数据归属」可见。
+    审核员无权查看（含磁盘路径，属敏感明细）。
     """
     try:
         from ..models import UploadFile
@@ -378,7 +462,7 @@ def user_media(user_id):
 
 
 @bp.delete('/<int:user_id>')
-@super_admin_required
+@admin_required(capability=CAP_USER_DETAIL)
 def delete_user(user_id):
     """**彻底删除用户**（不可恢复）。
 
@@ -389,9 +473,9 @@ def delete_user(user_id):
         - 操作日志保留（审计需要），但把 user_id 置空
 
     安全约束：
-        - 仅超级管理员可调用；
+        - 仅管理员可调用（`user.detail` 能力，审核员没有）；
         - 不能删除自己；
-        - 非超级管理员不能删除管理员账号；
+        - **不能删除管理员**（系统只允许一个管理员，换人走「管理员移交」）；
         - 请求体必须带 `confirm_student_id` 且与该用户学号完全一致（二次确认，防误删）。
     """
     try:
@@ -402,8 +486,10 @@ def delete_user(user_id):
 
         if user.id == operator.id:
             raise ValidationError('不能删除自己的账号')
-        if user.is_admin and not operator.is_super_admin:
-            return error('只有超级管理员可以删除管理员账号', CODE_FORBIDDEN, http_status=403)
+        if user.is_admin:
+            raise ValidationError(
+                '不能删除管理员账号。如需更换管理员，请使用「管理员移交」功能'
+            )
 
         payload = get_json(required=False) or {}
         confirm = (payload.get('confirm_student_id') or '').strip()

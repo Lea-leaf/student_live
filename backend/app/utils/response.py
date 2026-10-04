@@ -46,6 +46,7 @@ CODE_POST_NOT_FOUND = 4001
 CODE_POST_CLOSED = 4002           # 该状态不允许查看详情
 CODE_POST_AUDIT_DONE = 4003       # 已审核，不能重复审核
 CODE_POST_STATUS_INVALID = 4004   # 非法状态流转
+CODE_POST_ASSIGN_TAKEN = 4005     # 已被其他审核员认领（先到先得）
 
 CODE_REPORT_HANDLED = 5001
 CODE_NOTIFY_NOT_FOUND = 5002
@@ -78,6 +79,7 @@ CODE_MESSAGES = {
     CODE_POST_CLOSED: '该信息已结束，无法查看详情',
     CODE_POST_AUDIT_DONE: '该帖子已审核，请勿重复操作',
     CODE_POST_STATUS_INVALID: '当前状态不允许该操作',
+    CODE_POST_ASSIGN_TAKEN: '该帖子已被其他审核员认领',
     CODE_REPORT_HANDLED: '该举报已处理',
     CODE_NOTIFY_NOT_FOUND: '通知不存在',
     CODE_MESSAGE_RECALL_EXPIRED: '超过 5 分钟不能撤回',

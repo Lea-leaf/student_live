@@ -7,10 +7,19 @@
 """
 
 import json
+from datetime import datetime, timedelta
 
 from ..extensions import db
 from ..models import Post
 from ..utils.constants import (
+    ASSIGNMENT_CLAIM_TTL_HOURS,
+    ASSIGN_SOURCE_ADMIN,
+    ASSIGN_SOURCE_SELF,
+    AUDIT_ACTION_APPROVE,
+    AUDIT_ACTION_ASSIGN,
+    AUDIT_ACTION_CLAIM,
+    AUDIT_ACTION_REJECT,
+    AUDIT_ACTION_RELEASE,
     AUDIT_APPROVED,
     AUDIT_PENDING,
     AUDIT_REJECTED,
@@ -55,11 +64,11 @@ def can_view_detail(post, user):
     """详情可见性判断。
 
     规则（需求 6.2）：
-    - 管理员：全部可见；
+    - 后台角色（管理员 / 审核员 / 版主）：全部可见 —— 审核员必须能看待审帖；
     - 作者本人：可见（含待审核 / 已关闭），便于自己管理；
     - 普通用户 / 游客：必须审核通过，且状态为「进行中」。
     """
-    if user and user.is_admin:
+    if user and user.is_staff:
         return True
     if user and post.user_id == user.id:
         return True
@@ -67,7 +76,11 @@ def can_view_detail(post, user):
 
 
 def can_edit(post, user):
-    """编辑权限：作者本人或管理员，且帖子未关闭。"""
+    """编辑权限：作者本人或**真正的管理员**，且帖子未关闭。
+
+    注意这里是 `is_admin` 而不是 `is_staff`：审核员可以审核、删帖、置顶，
+    但**不能改别人的正文** —— 改内容属发布者权利，审核员替人改会造成责任不清。
+    """
     if not user:
         return False
     if user.is_admin:
@@ -112,24 +125,214 @@ def apply_status(post, target_status, operator=None, reason=None):
 # ---------------------------------------------------------------------------
 # 审核
 # ---------------------------------------------------------------------------
-def approve(post, operator, remark=None):
-    from datetime import datetime
+def _write_audit_log(post, action, actor_id=None, assignee_id=None,
+                     assign_source=None, remark=None, duration_ms=None, commit=False):
+    """写一条审核流水（只追加）。失败不阻断主流程。"""
+    try:
+        from ..models import PostAuditLog
 
+        log = PostAuditLog(
+            post_id=post.id,
+            action=action,
+            actor_id=actor_id,
+            assignee_id=assignee_id,
+            assign_source=assign_source,
+            remark=(remark or None),
+            duration_ms=duration_ms,
+        )
+        db.session.add(log)
+        if commit:
+            db.session.commit()
+        return log
+    except Exception:  # noqa: BLE001 - 流水写失败不应影响审核动作本身
+        db.session.rollback()
+        return None
+
+
+def _assignment_duration_ms(post):
+    """从指派/认领到现在的耗时（毫秒）。"""
+    if not post.assigned_at:
+        return None
+    delta = datetime.now() - post.assigned_at
+    return max(int(delta.total_seconds() * 1000), 0)
+
+
+def _clear_assignment(post):
+    """清空指派关系（审核结束或退回公共池）。"""
+    post.assignee_id = None
+    post.assigned_by = None
+    post.assigned_at = None
+    post.assignment_expires_at = None
+
+
+def approve(post, operator, remark=None):
+    """审核通过，并结束本次指派。"""
+    duration = _assignment_duration_ms(post)
+    assignee = post.assignee_id
     post.audit_status = AUDIT_APPROVED
     post.audit_remark = remark
     post.audited_by = operator.id
     post.audited_at = datetime.now()
+    _clear_assignment(post)
+    _write_audit_log(post, AUDIT_ACTION_APPROVE, actor_id=operator.id,
+                     assignee_id=assignee, remark=remark, duration_ms=duration)
     return post
 
 
 def reject(post, operator, remark=None):
-    from datetime import datetime
-
+    """审核拒绝，并结束本次指派。"""
+    duration = _assignment_duration_ms(post)
+    assignee = post.assignee_id
     post.audit_status = AUDIT_REJECTED
     post.audit_remark = remark or '内容不符合平台规范'
     post.audited_by = operator.id
     post.audited_at = datetime.now()
+    _clear_assignment(post)
+    _write_audit_log(post, AUDIT_ACTION_REJECT, actor_id=operator.id,
+                     assignee_id=assignee, remark=remark, duration_ms=duration)
     return post
+
+
+# ---------------------------------------------------------------------------
+# 审核指派 / 认领（先到先得）
+# ---------------------------------------------------------------------------
+def release_expired_assignments(post_type=None):
+    """把已到期的认领退回公共池（懒执行，不需要定时任务）。
+
+    在「待审列表」与「认领」前各调一次，保证用户看到的指派状态永远是最新的。
+    管理员手动指派默认不设到期时间，因此不会被这里退回。
+    """
+    query = Post.query.filter(
+        Post.assignee_id.isnot(None),
+        Post.assignment_expires_at.isnot(None),
+        Post.assignment_expires_at <= datetime.now(),
+        Post.audit_status == AUDIT_PENDING,
+    )
+    if post_type:
+        query = query.filter(Post.type == post_type)
+
+    released = 0
+    for post in query.all():
+        previous = post.assignee_id
+        _clear_assignment(post)
+        _write_audit_log(post, AUDIT_ACTION_RELEASE, actor_id=None,
+                         assignee_id=previous, remark='认领超时自动退回公共池')
+        released += 1
+    if released:
+        db.session.commit()
+    return released
+
+
+def build_pending_query(post_type=None, scope=None, current_user_id=None, assignee_id=None):
+    """待审列表查询。
+
+    :param scope: 'mine' 只看我的 | 'pool' 公共池（无人认领）| None 全部
+    :param current_user_id: 当前用户ID（scope='mine' 时用）
+    :param assignee_id: 指定审核人（管理员用，可查某位审核员名下有多少）
+    """
+    query = pending_audit_query(post_type)
+    if assignee_id is not None:
+        return query.filter(Post.assignee_id == assignee_id)
+    if scope == 'mine':
+        return query.filter(Post.assignee_id == current_user_id)
+    if scope in ('pool', 'unassigned'):
+        return query.filter(Post.assignee_id.is_(None))
+    return query
+
+
+def assign(post, assignee, operator, remark=None, ttl_hours=None):
+    """管理员把帖子指派 / 改派给某位审核员（assignee=None 表示收回公共池）。
+
+    管理员指派默认**不设到期时间**（ttl_hours=None），由管理员手动改派；
+    传 ttl_hours 则会像自助认领一样到期自动退回。
+
+    注意：管理员指派**可以覆盖审核员已认领的帖子** —— 这是刻意的设计，
+    "认领"只约束审核员之间，不约束管理员；每次覆盖都会记一条 assign 流水，
+    上一任审核员在流水里留痕，事后可查（谁被谁改派过）。
+    """
+    previous = post.assignee_id
+    remark = remark or None
+
+    if assignee is None:
+        _clear_assignment(post)
+        _write_audit_log(post, AUDIT_ACTION_RELEASE, actor_id=operator.id,
+                         assignee_id=previous, remark=remark or '管理员收回至公共池')
+        return post
+
+    post.assignee_id = assignee.id
+    post.assigned_by = operator.id
+    post.assigned_at = datetime.now()
+    post.assignment_expires_at = (
+        datetime.now() + timedelta(hours=ttl_hours) if ttl_hours else None
+    )
+    _write_audit_log(post, AUDIT_ACTION_ASSIGN, actor_id=operator.id,
+                     assignee_id=assignee.id,
+                     assign_source=ASSIGN_SOURCE_ADMIN,
+                     remark=remark or (f'由 {previous} 改派' if previous else None))
+    return post
+
+
+def claim(post, operator, ttl_hours=None):
+    """审核员自助认领（**先到先得**，并发安全）。
+
+    用一条带条件的原子 UPDATE 抢占：
+        UPDATE posts SET assignee_id=:me ... WHERE id=:id AND assignee_id IS NULL
+    行数为 0 说明已被别人抢走 —— 数据库的行锁天然实现"第一个写入的赢"，
+    不需要额外的排队表或定时任务。
+
+    :return: (ok, message)  ok=False 表示已被他人认领
+    """
+    from sqlalchemy import update as sa_update
+
+    ttl = ttl_hours or ASSIGNMENT_CLAIM_TTL_HOURS
+    now = datetime.now()
+    expires = now + timedelta(hours=ttl)
+
+    result = db.session.execute(
+        sa_update(Post)
+        .where(
+            Post.id == post.id,
+            Post.assignee_id.is_(None),          # ← 关键条件：只有公共池能被抢
+            Post.audit_status == AUDIT_PENDING,  # ← 已审完的不能再抢
+            Post.is_deleted.is_(False),
+        )
+        .values(
+            assignee_id=operator.id,
+            assigned_by=operator.id,
+            assigned_at=now,
+            assignment_expires_at=expires,
+        )
+    )
+    if result.rowcount == 0:
+        db.session.rollback()
+        return False, '该帖子已被其他审核员认领'
+
+    db.session.commit()
+    db.session.refresh(post)
+    _write_audit_log(post, AUDIT_ACTION_CLAIM, actor_id=operator.id,
+                     assignee_id=operator.id, assign_source=ASSIGN_SOURCE_SELF,
+                     remark=f'{ttl} 小时内未处理将自动退回公共池', commit=True)
+    return True, '认领成功'
+
+
+def release(post, operator, remark=None):
+    """审核员放弃认领：退回公共池（不能放弃别人的）。"""
+    previous = post.assignee_id
+    _clear_assignment(post)
+    _write_audit_log(post, AUDIT_ACTION_RELEASE, actor_id=operator.id,
+                     assignee_id=previous, remark=remark or '审核员主动放弃')
+    return post
+
+
+def count_pending_by_assignee():
+    """按审核人统计待审数量（管理端分配面板用）。"""
+    rows = (
+        db.session.query(Post.assignee_id, db.func.count(Post.id))
+        .filter(Post.audit_status == AUDIT_PENDING, Post.is_deleted.is_(False))
+        .group_by(Post.assignee_id)
+        .all()
+    )
+    return {assignee_id: count for assignee_id, count in rows}
 
 
 def pending_audit_query(post_type=None):
@@ -226,7 +429,9 @@ def build_post(post_type, user, data, audit_enabled=True):
         contact=validate_contact(data.get('contact')),
         status=POST_ONGOING,
     )
-    # 管理员发帖默认直接通过；否则按平台开关决定是否需要审核
+    # 只有**真正的管理员**发帖默认直接通过。
+    # ⚠️ 这里刻意用 is_admin 而不是 is_staff：审核员（auditor）的帖子必须走审核，
+    # 否则"来审别人帖子的人"自己的帖子却跳过审核（详见 docs/USER_FIELDS.md 的 R3）。
     if user.is_admin or not audit_enabled:
         post.audit_status = AUDIT_APPROVED
     else:
@@ -277,6 +482,12 @@ def purge_overflow():
     mode = get_config('recycle_retention_mode', 'force')
     if mode != 'force':
         return 0
+
+    from ..models import PostAuditLog
+
+    for item in overflow:
+        # 审核流水先删：post_audit_logs.post_id 是 NOT NULL，留着会破坏引用完整性
+        PostAuditLog.query.filter_by(post_id=item.id).delete(synchronize_session=False)
     for item in overflow:
         db.session.delete(item)
     db.session.commit()
@@ -297,4 +508,7 @@ __all__ = [
     'pending_audit_query', 'save_post', 'build_post', 'attach_media', 'bump_view',
     'soft_delete', 'purge_overflow', 'recycle_bin_query',
     'normalize_ext', 'validate_module_ext', 'MAX_EXT_JSON_BYTES',
+    # 审核指派 / 认领
+    'assign', 'claim', 'release', 'build_pending_query',
+    'release_expired_assignments', 'count_pending_by_assignee',
 ]

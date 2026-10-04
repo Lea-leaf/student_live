@@ -43,8 +43,10 @@ async function onSubmit() {
     const redirect = route.query.redirect ? String(route.query.redirect) : ''
     if (redirect) {
       router.replace(redirect)
-    } else if (user.is_admin) {
-      router.replace({ name: 'admin-dashboard' })
+    } else if (user.is_staff) {
+      // 后台角色（管理员 / 审核员）登录后直接进自己的后台首页；
+      // `/admin` 会按能力重定向到他能进的第一个页面。
+      router.replace('/admin')
     } else {
       router.replace({ name: 'home' })
     }

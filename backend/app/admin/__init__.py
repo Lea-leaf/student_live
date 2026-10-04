@@ -16,7 +16,8 @@
     configs    系统配置
 """
 
-from . import comments, configs, dashboard, logs, modules, posts, reports, trash, users
+from . import (comments, configs, dashboard, handover, logs, modules, posts,
+               reports, trash, users)
 
 #: 管理端蓝图注册表。
 #: 顺序有讲究：posts 蓝图里定义了 /posts/<post_id> 这类动态段路由，
@@ -30,6 +31,7 @@ ADMIN_BLUEPRINTS = [
     reports.bp,
     configs.bp,
     logs.bp,
+    handover.bp,      # /admin/handover/*（固定路径，不会被 users 的动态段吃掉）
     users.bp,
     posts.bp,
 ]

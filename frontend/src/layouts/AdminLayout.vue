@@ -2,8 +2,10 @@
 /**
  * 管理端布局：左侧菜单 + 顶部面包屑 + 内容区。
  *
- * 菜单项与后端 `app/admin/*` 蓝图一一对应；
- * 后续做管理员分级（RBAC）时，只需在这里按角色过滤 menuItems 即可。
+ * 菜单项与后端 `app/admin/*` 蓝图一一对应，并按**能力**过滤：
+ * 后端在登录 / `auth/me` 时下发 `capabilities`，审核员只拿到内容相关的几项，
+ * 因此这里自然只会渲染出他能用的菜单（概览 / 审核台 / 内容 / 用户 / 举报）。
+ * ⚠️ 前端过滤只是体验，真正的门禁在后端装饰器上。
  */
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -35,18 +37,34 @@ const route = useRoute()
 
 const collapsed = ref(false)
 
-/** 菜单结构（后续 RBAC 分级时按角色过滤） */
-const menuItems = [
-  { index: '/admin/dashboard', title: '概览', icon: HomeFilled },
-  { index: '/admin/audit', title: '审核工作台', icon: Document },
-  { index: '/admin/posts', title: '内容管理', icon: List },
-  { index: '/admin/users', title: '用户管理', icon: User },
-  { index: '/admin/modules', title: '模块管理', icon: Grid },
-  { index: '/admin/reports', title: '举报处理', icon: ChatDotSquare },
-  { index: '/admin/trash', title: '回收站', icon: Delete },
-  { index: '/admin/logs', title: '日志管理', icon: DataLine },
-  { index: '/admin/configs', title: '系统配置', icon: Setting }
+/** 菜单结构：capability 决定谁能看到（与后端 ROLE_PERMISSIONS 一一对应） */
+const MENU_ITEMS = [
+  { index: '/admin/dashboard', title: '概览', icon: HomeFilled, capability: 'dashboard.view' },
+  { index: '/admin/audit', title: '审核工作台', icon: Document, capability: 'post.audit' },
+  { index: '/admin/posts', title: '内容管理', icon: List, capability: 'post.view' },
+  { index: '/admin/users', title: '用户管理', icon: User, capability: 'user.view' },
+  { index: '/admin/modules', title: '模块管理', icon: Grid, capability: 'module.manage' },
+  { index: '/admin/reports', title: '举报处理', icon: ChatDotSquare, capability: 'report.handle' },
+  { index: '/admin/trash', title: '回收站', icon: Delete, capability: 'trash.view' },
+  { index: '/admin/logs', title: '日志管理', icon: DataLine, capability: 'log.view' },
+  { index: '/admin/configs', title: '系统配置', icon: Setting, capability: 'config.manage' }
 ]
+
+/** 按当前账号的能力过滤菜单 */
+const menuItems = computed(() =>
+  MENU_ITEMS.filter((item) => !item.capability || userStore.can(item.capability))
+)
+
+/** 身份徽章：管理员=红色，其他后台角色（审核员等）=橙色 */
+const roleTagType = computed(() => (userStore.isTrueAdmin ? 'danger' : 'warning'))
+
+/**
+ * 交接中提示：冻结中的待上任管理员**身份仍显示原角色**（如「内容审核员」），
+ * 避免"挂着管理员头衔却什么都干不了"的困惑；交接进度单独用一个小标签提示。
+ */
+const handoverHint = computed(() =>
+  userStore.user?.handover_pending ? '交接中' : ''
+)
 
 const activeMenu = computed(() => {
   // 详情页高亮父级菜单
@@ -116,6 +134,13 @@ async function logout() {
                 {{ userStore.displayName.slice(0, 1) }}
               </el-avatar>
               <span>{{ userStore.displayName }}</span>
+              <!-- 身份标识：管理员 / 内容审核员；交接中额外提示 -->
+              <el-tag :type="roleTagType" size="small" effect="dark">
+                {{ userStore.roleLabel }}
+              </el-tag>
+              <el-tag v-if="handoverHint" type="info" size="small" effect="plain">
+                {{ handoverHint }}
+              </el-tag>
             </span>
             <template #dropdown>
               <el-dropdown-menu>

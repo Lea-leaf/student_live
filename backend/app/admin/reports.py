@@ -13,7 +13,7 @@ from ..extensions import db
 from ..models import Post, Report, User
 from ..models.base import paginate
 from ..utils.auth import admin_required, current_user
-from ..utils.constants import REPORT_HANDLED, REPORT_PENDING, REPORT_REJECTED
+from ..utils.constants import CAP_REPORT_HANDLE, REPORT_HANDLED, REPORT_PENDING, REPORT_REJECTED
 from ..utils.helpers import current_page_args, keyword_arg
 from ..utils.logger import write_operation_log
 from ..utils.notification_service import send
@@ -25,7 +25,7 @@ bp = Blueprint('admin_reports', __name__, url_prefix='/reports')
 
 
 @bp.get('')
-@admin_required
+@admin_required(capability=CAP_REPORT_HANDLE)
 def list_reports():
     """举报列表。参数：page / size / status / keyword。"""
     try:
@@ -55,7 +55,7 @@ def list_reports():
 
 
 @bp.post('/<int:report_id>/handle')
-@admin_required
+@admin_required(capability=CAP_REPORT_HANDLE)
 def handle_report(report_id):
     """处理举报。
 
@@ -65,6 +65,10 @@ def handle_report(report_id):
             "remark": "处理说明",
             "action": "none" | "delete_post" | "ban_user"   # 可选的联动动作
         }
+
+    权限：审核员也能处置举报（含删帖 / 封禁被举报人），
+    但联动封禁**只能作用于普通用户** —— 审核员不能借举报流程处置其他后台角色，
+    否则等于绕过 user 模块的"只能管普通用户"限制。
     """
     try:
         operator = current_user()
@@ -92,7 +96,11 @@ def handle_report(report_id):
             target_id = report.target_user_id or (report.post.user_id if report.post else None)
             if target_id:
                 target = User.query.get(target_id)
-                if target and not target.is_admin:
+                if target and target.id == operator.id:
+                    action_result = '不能封禁自己，已跳过'
+                elif target and not operator.is_admin and target.is_staff:
+                    action_result = '审核员只能封禁普通用户，已跳过'
+                elif target and not target.is_admin:
                     target.ban(reason=f'被举报：{report.reason}', operator_id=operator.id)
                     action_result = '被举报用户已封禁'
 

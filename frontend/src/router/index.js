@@ -14,6 +14,23 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import { useAppStore } from '@/stores/app'
 
+/**
+ * 管理端落地页优先级：按角色实际拥有的能力挑第一个可进的页面。
+ * 管理员 → 概览；只有审核能力的角色 → 审核工作台。
+ * 顺序与 AdminLayout 的菜单保持一致，也是 `/admin` 重定向的依据。
+ */
+const ADMIN_LANDING = [
+  { name: 'admin-dashboard', capability: 'dashboard.view' },
+  { name: 'admin-audit', capability: 'post.audit' },
+  { name: 'admin-posts', capability: 'post.view' },
+  { name: 'admin-reports', capability: 'report.handle' },
+  { name: 'admin-users', capability: 'user.view' },
+  { name: 'admin-trash', capability: 'trash.view' },
+  { name: 'admin-logs', capability: 'log.view' },
+  { name: 'admin-modules', capability: 'module.manage' },
+  { name: 'admin-configs', capability: 'config.manage' }
+]
+
 const routes = [
   // ------------------------------------------------------------------
   // 公开页面（登录 / 注册）
@@ -110,72 +127,82 @@ const routes = [
 
   // ------------------------------------------------------------------
   // 管理端
+  //
+  // `meta.capability` 决定「谁能进这个页面」：后端下发的能力清单是唯一依据，
+  // 审核员只拿到内容相关的几项，因此自然看不到系统配置 / 模块 / 日志 / 回收站。
+  // 注意：这只是**体验层**过滤，真正的门禁在后端装饰器上。
   // ------------------------------------------------------------------
   {
     path: '/admin',
     component: () => import('@/layouts/AdminLayout.vue'),
-    redirect: '/admin/dashboard',
+    // 不再硬编码跳概览：审核员没有 dashboard.view 时会被守卫再弹一次，
+    // 这里直接交给他能进的第一个页面。
+    redirect: () => {
+      const userStore = useUserStore()
+      const landing = ADMIN_LANDING.find((item) => userStore.can(item.capability))
+      return landing ? { name: landing.name } : { name: 'home', query: { denied: 'admin' } }
+    },
     meta: { requiresAuth: true, requiresAdmin: true },
     children: [
       {
         path: 'dashboard',
         name: 'admin-dashboard',
         component: () => import('@/views/admin/DashboardView.vue'),
-        meta: { title: '概览', requiresAdmin: true }
+        meta: { title: '概览', requiresAdmin: true, capability: 'dashboard.view' }
       },
       {
         path: 'users',
         name: 'admin-users',
         component: () => import('@/views/admin/UserManageView.vue'),
-        meta: { title: '用户管理', requiresAdmin: true }
+        meta: { title: '用户管理', requiresAdmin: true, capability: 'user.view' }
       },
       {
         path: 'users/:id',
         name: 'admin-user-detail',
         component: () => import('@/views/admin/UserDetailView.vue'),
-        meta: { title: '用户详情', requiresAdmin: true }
+        meta: { title: '用户详情', requiresAdmin: true, capability: 'user.detail' }
       },
       {
         path: 'posts',
         name: 'admin-posts',
         component: () => import('@/views/admin/PostManageView.vue'),
-        meta: { title: '内容管理', requiresAdmin: true }
+        meta: { title: '内容管理', requiresAdmin: true, capability: 'post.view' }
       },
       {
         path: 'audit',
         name: 'admin-audit',
         component: () => import('@/views/admin/AuditView.vue'),
-        meta: { title: '审核工作台', requiresAdmin: true }
+        meta: { title: '审核工作台', requiresAdmin: true, capability: 'post.audit' }
       },
       {
         path: 'modules',
         name: 'admin-modules',
         component: () => import('@/views/admin/ModuleManageView.vue'),
-        meta: { title: '模块管理', requiresAdmin: true }
+        meta: { title: '模块管理', requiresAdmin: true, capability: 'module.manage' }
       },
       {
         path: 'trash',
         name: 'admin-trash',
         component: () => import('@/views/admin/TrashView.vue'),
-        meta: { title: '回收站', requiresAdmin: true }
+        meta: { title: '回收站', requiresAdmin: true, capability: 'trash.view' }
       },
       {
         path: 'reports',
         name: 'admin-reports',
         component: () => import('@/views/admin/ReportView.vue'),
-        meta: { title: '举报处理', requiresAdmin: true }
+        meta: { title: '举报处理', requiresAdmin: true, capability: 'report.handle' }
       },
       {
         path: 'logs',
         name: 'admin-logs',
         component: () => import('@/views/admin/LogView.vue'),
-        meta: { title: '日志管理', requiresAdmin: true }
+        meta: { title: '日志管理', requiresAdmin: true, capability: 'log.view' }
       },
       {
         path: 'configs',
         name: 'admin-configs',
         component: () => import('@/views/admin/ConfigView.vue'),
-        meta: { title: '系统配置', requiresAdmin: true }
+        meta: { title: '系统配置', requiresAdmin: true, capability: 'config.manage' }
       }
     ]
   },
@@ -213,6 +240,17 @@ router.beforeEach(async (to) => {
   // 管理端权限
   if (to.meta.requiresAdmin && !userStore.isAdmin) {
     return { name: 'home', query: { denied: 'admin' } }
+  }
+
+  // 管理端页面的能力校验：审核员没有 config.manage，所以进不了系统配置
+  if (to.meta.capability && !userStore.can(to.meta.capability)) {
+    // 已经被挡在某个管理页外时，退回到他确实能进的第一个管理页，
+    // 避免出现"点进去又被弹回前台"的来回跳。
+    const fallback = ADMIN_LANDING.find((item) => userStore.can(item.capability))
+    if (fallback && to.name !== fallback.name) {
+      return { name: fallback.name, query: { denied: 'capability' } }
+    }
+    return { name: 'home', query: { denied: 'capability' } }
   }
 
   // 登录校验
