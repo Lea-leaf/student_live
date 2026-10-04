@@ -106,7 +106,7 @@
 
 ---
 
-## 四、失物招领模块 `/api/v1/lost_found`（P0）
+## 四、帖子模块 `/api/v1/lost_found`（默认失物招领，也支持 `type=second_hand`）
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
@@ -116,10 +116,10 @@
 | POST | `/lost_found/posts/upload` | 登录 | 单独上传图片/视频 |
 | PUT | `/lost_found/posts/{id}` | 作者/管理员 | 编辑（作者编辑后重新进入待审核） |
 | DELETE | `/lost_found/posts/{id}` | 作者/管理员 | 删除（软删除 → 回收站） |
-| GET | `/lost_found/my/posts` | 登录 | 我的发布（含全部状态） |
+| GET | `/lost_found/my/posts` | 登录 | 我的发布：默认返回全部模块，可用 `?type=` 过滤；含全部状态 |
 | POST | `/lost_found/posts/{id}/status` | 作者/管理员 | 状态流转 |
 | POST | `/lost_found/posts/{id}/claim` | 作者/管理员 | 标记已认领（等价 `status=claimed`） |
-| GET | `/lost_found/meta` | 游客 | 模块元信息（字段要求、状态字典、是否需审核） |
+| GET | `/lost_found/meta?type=second_hand` | 游客 | 模块元信息（字段要求、状态字典、是否需审核；二手交易会额外返回价格等 ext 字段） |
 
 ¹ 游客可浏览列表由系统配置 `guest_can_list` 控制（默认开）。
 ² 游客可看详情由 `guest_can_detail` 控制（默认关）。
@@ -133,25 +133,31 @@
 | `status` | `ongoing` / `claimed` / `expired` / `closed` |
 | `mine=1` | 只看我的发布（需登录，含待审核与已关闭） |
 | `all=1` | 管理员查看全部（含待审核） |
-| `sort` | `latest`（默认）/ `hot` / `oldest` |
+| `sort` | `latest`（默认）/ `hot` / `oldest`；`hot` = 浏览*1 + 评论*3 + 点赞*2 + 收藏*2，再按 24 小时时间衰减 |
+| `type` | 模块 code，默认 `lost_found`；已实现 `second_hand`（二手交易），必须是启用中的模块 |
 
 **发布请求体（JSON 方式）**
 
 ```json
 {
-  "title": "在图书馆丢了一把黑色雨伞",
-  "content": "三楼自习区，伞柄有小熊挂件",
-  "location": "图书馆三楼",
-  "happened_at": "2026-03-01 15:30:00",
-  "contact": "微信 xiaoming2021",
-  "media": [{ "id": 3, "url": "/api/v1/files/20210001/20260301/xxx.jpg", "type": "image", "name": "伞.jpg" }]
+  "type": "second_hand",
+  "title": "出九成新自行车",
+  "content": "骑了半年，刹车刚保养过",
+  "contact": "微信 secondhand",
+  "media": [{ "id": 3, "url": "/api/v1/files/20210001/20260301/xxx.jpg", "type": "image", "name": "车.jpg" }],
+  "ext": { "price": 260, "original_price": 480, "condition": "九成新", "trade_type": "面交" }
 }
 ```
 
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `contact` | **是** | 联系方式，公开可见 |
+| `type` | 否 | 模块 code，默认 `lost_found`；`second_hand` 表示二手交易 |
+| `ext` | 视模块 | 模块扩展 JSON；二手交易必填 `price`，可选 `original_price` / `condition` / `trade_type` |
 | `title` / `content` / `location` / `happened_at` / `media` | 否 | 选填 |
+
+> `ext` 必须是 JSON 对象、最大 4096 字节；二手交易缺 `price` 或价格非法会返回 `1001`。
+> 二手交易列表 / 详情 / 卡片都会返回 `ext`，前端按 `type` 渲染价格、成色与交易方式。
 
 **multipart 方式**：字段名同上，文件字段名为 `files`（可多文件），媒体随表单一起提交。
 
@@ -172,6 +178,14 @@
 | 已认领 | ✅ | ❌（作者与管理员除外） |
 | 已过期 | ✅ | ❌（作者与管理员除外） |
 | 已关闭 | ❌ | ❌（作者与管理员除外） |
+
+> **模块差异（second_hand）**：状态值仍是 `ongoing / claimed / expired / closed`，
+> 但显示文案分别为 `在售中 / 已售出 / 已过期 / 已下架`；
+> `happened_at` 是必填字段（交易时间）；发布页会在前端提供模块选择器。
+
+> **前端统一发布入口**：所有发布按钮都跳 `/publish`，类型由页面内「选择发布类型」决定，
+> 不通过 URL 的 `?type=` 传参；模块字段配置在前端 `src/config/moduleForms.js`，
+> 未登记模块自动走 `default`。切换模块时通用字段保留，时间与专属字段清空且不恢复。
 
 **媒体文件存放规则**
 
@@ -293,7 +307,8 @@ POST 请求体：
 | GET | `/admin/dashboard/trend?days=7` | 近 N 天发帖 / 注册趋势 |
 | GET | `/admin/dashboard/module-stats` | 各模块帖子数量分布 |
 | GET | `/admin/dashboard/pending?limit=10` | 最近待审核帖子 |
-| GET | `/admin/dashboard/media` | 媒体存储用量：按用户列磁盘占用 + 孤儿文件清单 |
+| GET | `/admin/dashboard/media` | 媒体存储用量：按用户列磁盘占用 + 孤儿文件 + 未提交上传清单 |
+| POST | `/admin/dashboard/media/clean` | 清理未引用媒体：未提交上传（默认保留 24 小时）+ 磁盘孤儿文件 |
 
 ### 6.2 用户管理
 

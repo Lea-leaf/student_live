@@ -15,6 +15,7 @@ from ..utils.constants import (
     AUDIT_STATUS_LABELS,
     AUDIT_STATUSES,
     MODULE_LOST_FOUND,
+    MODULE_STATUS_LABELS,
     POST_DETAIL_VISIBLE_STATUSES,
     POST_LIST_VISIBLE_STATUSES,
     POST_ONGOING,
@@ -90,7 +91,8 @@ class Post(BaseModel):
         data = super().to_dict(exclude=exclude, extra=extra)
         data['media'] = self._media_list()
         data['ext'] = self._ext_dict()
-        data['status_label'] = POST_STATUS_LABELS.get(self.status, self.status)
+        data['status_label'] = MODULE_STATUS_LABELS.get(self.type, POST_STATUS_LABELS).get(
+            self.status, self.status)
         data['audit_status_label'] = AUDIT_STATUS_LABELS.get(self.audit_status, self.audit_status)
         data['author'] = self.author.to_brief() if self.author else None
         data['happened_at'] = data.get('happened_at') or None
@@ -111,7 +113,8 @@ class Post(BaseModel):
             'location': self.location,
             'happened_at': self.happened_at.strftime('%Y-%m-%d %H:%M:%S') if self.happened_at else None,
             'status': self.status,
-            'status_label': POST_STATUS_LABELS.get(self.status, self.status),
+            'status_label': MODULE_STATUS_LABELS.get(self.type, POST_STATUS_LABELS).get(
+                self.status, self.status),
             'audit_status': self.audit_status,
             'is_top': self.is_top,
             'view_count': self.view_count,
@@ -121,6 +124,8 @@ class Post(BaseModel):
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'author': self.author.to_brief() if self.author else None,
             'module_name': self.module_ref.name if self.module_ref else self.type,
+            # 列表卡片展示模块差异字段（例如二手交易价格）
+            'ext': self._ext_dict(),
         }
 
     # ------------------------------------------------------------------

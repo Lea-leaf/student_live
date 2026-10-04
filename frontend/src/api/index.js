@@ -90,6 +90,8 @@ export const API = {
     trend: `/admin/dashboard/trend`,
     moduleStats: `/admin/dashboard/module-stats`,
     pending: `/admin/dashboard/pending`,
+    media: `/admin/dashboard/media`,
+    mediaClean: `/admin/dashboard/media/clean`,
 
     users: `/admin/users`,
     userDetail: (id) => `/admin/users/${id}`,

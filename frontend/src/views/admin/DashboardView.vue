@@ -6,8 +6,10 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 import adminApi from '@/api/admin'
+import { formatSize } from '@/utils'
 
 const router = useRouter()
 
@@ -16,6 +18,8 @@ const stats = ref({})
 const trend = ref({ labels: [], posts: [], users: [] })
 const moduleStats = ref([])
 const pending = ref([])
+const mediaStats = ref({})
+const cleaningMedia = ref(false)
 
 const cards = computed(() => [
   { label: '用户总数', value: stats.value.user_total || 0, sub: `今日新增 ${stats.value.user_today || 0}`, color: '#409eff' },
@@ -41,16 +45,18 @@ onMounted(loadAll)
 async function loadAll() {
   loading.value = true
   try {
-    const [overview, trendData, moduleData, pendingData] = await Promise.all([
+    const [overview, trendData, moduleData, pendingData, mediaData] = await Promise.all([
       adminApi.dashboard.overview(),
       adminApi.dashboard.trend({ days: 7 }),
       adminApi.dashboard.moduleStats(),
-      adminApi.dashboard.pending({ limit: 8 })
+      adminApi.dashboard.pending({ limit: 8 }),
+      adminApi.dashboard.media()
     ])
     stats.value = overview
     trend.value = trendData
     moduleStats.value = moduleData.list || []
     pending.value = pendingData.list || []
+    mediaStats.value = mediaData || {}
   } catch (error) {
     // 拦截器已提示
   } finally {
@@ -60,6 +66,30 @@ async function loadAll() {
 
 function goCard(card) {
   if (card.route) router.push({ name: card.route })
+}
+
+async function cleanMedia() {
+  try {
+    await ElMessageBox.confirm(
+      `将清理超过 ${mediaStats.value.unattached_hours || 24} 小时未提交的上传文件，` +
+        '以及磁盘上没有数据库引用的孤儿文件。确认清理吗？',
+      '清理未引用媒体',
+      { type: 'warning', confirmButtonText: '确认清理' }
+    )
+  } catch (error) {
+    return
+  }
+  cleaningMedia.value = true
+  try {
+    const data = await adminApi.dashboard.mediaClean({ hours: mediaStats.value.unattached_hours || 24 })
+    const removed = (data.unattached?.removed_files || 0) + (data.orphan_removed || 0)
+    ElMessage.success(`清理完成，共删除 ${removed} 个文件`)
+    await loadAll()
+  } catch (error) {
+    // 拦截器已提示
+  } finally {
+    cleaningMedia.value = false
+  }
 }
 </script>
 
@@ -123,6 +153,45 @@ function goCard(card) {
       </el-col>
     </el-row>
 
+    <!-- 媒体存储 / 清理 -->
+    <div class="slp-card">
+      <div class="slp-flex-between slp-mb-16">
+        <h3>媒体存储</h3>
+        <el-button type="warning" plain :loading="cleaningMedia" @click="cleanMedia">
+          清理未引用文件
+        </el-button>
+      </div>
+      <el-row :gutter="12">
+        <el-col :xs="24" :sm="8">
+          <div class="media-stat">
+            <div class="media-stat__label">磁盘文件</div>
+            <div class="media-stat__value">
+              {{ mediaStats.root_files || 0 }} 个 / {{ formatSize(mediaStats.root_bytes || 0) }}
+            </div>
+          </div>
+        </el-col>
+        <el-col :xs="24" :sm="8">
+          <div class="media-stat">
+            <div class="media-stat__label">未提交上传（超过 {{ mediaStats.unattached_hours || 24 }} 小时）</div>
+            <div class="media-stat__value">{{ mediaStats.unattached_count || 0 }} 个</div>
+          </div>
+        </el-col>
+        <el-col :xs="24" :sm="8">
+          <div class="media-stat">
+            <div class="media-stat__label">磁盘孤儿文件</div>
+            <div class="media-stat__value">{{ mediaStats.orphan_count || 0 }} 个</div>
+          </div>
+        </el-col>
+      </el-row>
+      <el-alert
+        class="slp-mt-16"
+        type="info"
+        :closable="false"
+        show-icon
+        title="用户上传后未提交、或数据库已无引用的文件会占用磁盘；建议定期清理。"
+      />
+    </div>
+
     <!-- 待审核快捷处理 -->
     <div class="slp-card">
       <div class="slp-flex-between slp-mb-16">
@@ -144,6 +213,25 @@ function goCard(card) {
 </template>
 
 <style scoped>
+.media-stat {
+  padding: 10px 12px;
+  background: #f7f8fa;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.media-stat__label {
+  font-size: 12px;
+  color: #909399;
+}
+
+.media-stat__value {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+}
+
 .chart {
   display: flex;
   align-items: flex-end;

@@ -8,7 +8,11 @@ export const adminApi = {
     overview: () => request.get(API.admin.overview),
     trend: (params) => request.get(API.admin.trend, { params }),
     moduleStats: () => request.get(API.admin.moduleStats),
-    pending: (params) => request.get(API.admin.pending, { params })
+    pending: (params) => request.get(API.admin.pending, { params }),
+    /** 媒体存储用量 / 未提交上传 / 孤儿文件 */
+    media: () => request.get(API.admin.media),
+    /** 清理未引用媒体（未提交上传 + 孤儿文件，默认保留 24 小时） */
+    mediaClean: (data) => request.post(API.admin.mediaClean, data || {})
   },
 
   // ---------------- 用户管理 ----------------

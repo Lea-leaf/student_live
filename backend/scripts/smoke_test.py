@@ -103,6 +103,7 @@ def main():
     call('GET', '/admin/dashboard/overview', token=admin_token)
     call('GET', '/admin/dashboard/trend', token=admin_token)
     call('GET', '/admin/dashboard/module-stats', token=admin_token)
+    call('GET', '/admin/dashboard/media', token=admin_token)
     call('GET', '/admin/users?page=1&size=5', token=admin_token)
     call('GET', '/admin/posts?page=1&size=5', token=admin_token)
     call('GET', '/admin/posts/pending', token=admin_token)

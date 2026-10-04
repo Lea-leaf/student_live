@@ -111,11 +111,13 @@ def test_comment_reply_to_user_and_media(client, app, student2_token, sample_pos
     assert [item['type'] for item in comment['media']] == ['image', 'audio']
 
     with app.app_context():
-        from app.models import UploadFile
+        from app.models import Comment, UploadFile
 
         rows = UploadFile.query.filter_by(owner_type='comment',
                                           owner_id=comment['id']).all()
         assert {row.media_type for row in rows} == {'image', 'audio'}
+        # P1 回归：纯媒体评论以空字符串入库，兼容数据库的 NOT NULL
+        assert Comment.query.get(comment['id']).content == ''
 
     assert client.get(image['url']).status_code == 200
     assert client.get(voice['url']).status_code == 200
@@ -322,12 +324,14 @@ def test_message_with_voice_media(client, app, student, student2, student_token,
     assert sent['data']['media'][0]['type'] == 'audio'
 
     with app.app_context():
-        from app.models import UploadFile
+        from app.models import Message, UploadFile
 
         row = UploadFile.query.filter_by(owner_type='message',
                                          owner_id=sent['data']['id']).first()
         assert row is not None
         assert row.media_type == 'audio'
+        # P1 回归：纯媒体私信以空字符串入库，兼容数据库的 NOT NULL
+        assert Message.query.get(sent['data']['id']).content == ''
 
 
 def test_message_forbids_others_media(client, student, student_token, student2_token, upload_root):

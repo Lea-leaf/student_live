@@ -54,6 +54,21 @@ def test_create_needs_audit_then_visible_after_approve(client, student_token, ad
     assert listing['data']['list'][0]['id'] == post_id
 
 
+def test_ext_json_roundtrip_and_validation(client, student_token):
+    """P3 前置：ext_json 写入链路必须可校验、可回读。"""
+    ext = {'price': 120, 'condition': '九成新', 'trade_type': '面交'}
+    created = _create_post(client, student_token, title='二手测试', ext=ext).get_json()
+    assert created['code'] == 0, created
+    assert created['data']['ext'] == ext
+
+    # 非对象 / 超大 ext 都应在接口层被拒绝，而不是写坏数据库
+    bad = _create_post(client, student_token, title='非法 ext', ext=['not', 'dict']).get_json()
+    assert bad['code'] == 1001
+    huge = _create_post(client, student_token, title='超大 ext',
+                        ext={'blob': 'x' * 5000}).get_json()
+    assert huge['code'] == 1001
+
+
 def test_reject_sends_notification(client, student_token, admin_token):
     post_id = _create_post(client, student_token).get_json()['data']['id']
     client.post(f'/api/v1/admin/posts/{post_id}/audit',
@@ -204,6 +219,66 @@ def test_delete_goes_to_recycle_bin(client, student_token, admin_token, sample_p
                            headers=auth_header(admin_token)).get_json()
     assert restored['code'] == 0
     assert client.get('/api/v1/lost_found/posts').get_json()['data']['total'] == 1
+
+
+def test_second_hand_ext_flow(client, student_token, admin_token):
+    """P3 验证：二手交易的 ext_json 真实落库、按 type 列表、详情回读、必填校验。"""
+    ext = {'price': 388.5, 'original_price': 599, 'condition': '九成新', 'trade_type': '面交'}
+    created = client.post(
+        '/api/v1/lost_found/posts',
+        json={'type': 'second_hand', 'title': '出二手显示器', 'content': '27 寸 2K，无坏点',
+              'contact': '微信 screen', 'happened_at': '2026-12-01 10:00:00', 'ext': ext},
+        headers=auth_header(student_token),
+    ).get_json()
+    assert created['code'] == 0, created
+    post_id = created['data']['id']
+    assert created['data']['type'] == 'second_hand'
+    assert created['data']['ext'] == ext
+    assert created['data']['status_label'] == '在售中'
+
+    # 缺交易时间 / 缺价格都必须被接口层拒绝
+    no_time = client.post(
+        '/api/v1/lost_found/posts',
+        json={'type': 'second_hand', 'title': '没写交易时间', 'contact': '微信 x',
+              'ext': {'price': 10}},
+        headers=auth_header(student_token),
+    ).get_json()
+    assert no_time['code'] == 1001
+
+    bad = client.post(
+        '/api/v1/lost_found/posts',
+        json={'type': 'second_hand', 'title': '没写价格', 'contact': '微信 x',
+              'ext': {'condition': '全新'}},
+        headers=auth_header(student_token),
+    ).get_json()
+    assert bad['code'] == 1001
+
+    client.post(f'/api/v1/admin/posts/{post_id}/audit',
+                json={'audit_status': 'approved'}, headers=auth_header(admin_token))
+
+    # 按模块筛选：二手交易列表能看到，失物招领列表看不到
+    second_list = client.get('/api/v1/lost_found/posts?type=second_hand').get_json()
+    assert any(item['id'] == post_id for item in second_list['data']['list'])
+    assert all(item['type'] == 'second_hand' for item in second_list['data']['list'])
+    lost_list = client.get('/api/v1/lost_found/posts').get_json()
+    assert all(item['id'] != post_id for item in lost_list['data']['list'])
+
+    detail = client.get(f'/api/v1/lost_found/posts/{post_id}',
+                        headers=auth_header(student_token)).get_json()
+    assert detail['data']['ext']['price'] == 388.5
+
+    # 二手交易下 claimed 的显示文案应为「已售出」
+    claimed = client.post(f'/api/v1/lost_found/posts/{post_id}/claim',
+                          headers=auth_header(student_token)).get_json()
+    assert claimed['code'] == 0, claimed
+    assert claimed['data']['status_label'] == '已售出'
+    assert '已售出' in claimed['msg']
+
+    meta = client.get('/api/v1/lost_found/meta?type=second_hand').get_json()
+    assert meta['data']['module'] == 'second_hand'
+    assert 'price' in meta['data']['fields']
+    assert dict((item['value'], item['label'])
+                for item in meta['data']['statuses'])['claimed'] == '已售出'
 
 
 def test_module_meta(client):

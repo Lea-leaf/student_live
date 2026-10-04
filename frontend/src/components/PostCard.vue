@@ -25,6 +25,9 @@ const thumb = computed(() => {
 
 const title = computed(() => props.post.title || props.post.content?.slice(0, 24) || '（无标题）')
 
+/** 二手交易卡片展示价格 */
+const price = computed(() => (props.post.type === 'second_hand' ? props.post.ext?.price : ''))
+
 function onClick() {
   if (!clickable.value) return
   emit('click', props.post)
@@ -36,7 +39,10 @@ function onClick() {
     <div class="post-card__row">
       <div class="post-card__body">
         <div class="slp-flex-between slp-mb-8">
-          <h3 class="post-card__title">{{ title }}</h3>
+          <h3 class="post-card__title">
+            <span v-if="price" class="post-card__price">￥{{ price }}</span>
+            {{ title }}
+          </h3>
           <div class="post-card__tags">
             <el-tag v-if="post.is_top" type="danger" size="small" effect="dark">置顶</el-tag>
             <el-tag :type="statusTagType(post.status)" size="small">{{ post.status_label }}</el-tag>
@@ -82,6 +88,12 @@ function onClick() {
 </template>
 
 <style scoped>
+.post-card__price {
+  color: #f56c6c;
+  font-weight: 700;
+  margin-right: 6px;
+}
+
 .post-card__row {
   display: flex;
   gap: 14px;

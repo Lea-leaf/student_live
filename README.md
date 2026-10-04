@@ -11,6 +11,8 @@
 
 - 用户用 **学号 + 图形验证码** 注册，JWT 认证；
 - 核心模块 **失物招领（P0）** 已完整实现：发布 / 列表 / 搜索 / 详情 / 审核 / 状态流转 / 我的发布 / 回收站；
+- **模块化发布（v1.3）**：发布页可自选已启用模块（失物招领 / 二手交易 / 管理员新增模块），
+  模块差异字段继续放 `ext_json`；
 - **社区互动（v1.2）**：评论楼中楼 / 图片语音 / 5 分钟撤回、评论与帖子点赞、
   私信会话 / 收发 / 已读回执 / 未读红点 / 5 分钟撤回 / 单侧删除，
   被评论、被回复 @、被点赞、收到私信都会写入互动通知；
@@ -32,7 +34,7 @@ Project_graduation/
 │   │   ├── models/               数据模型（用户/帖子/模块/互动/点赞/日志/配置）
 │   │   ├── modules/              业务模块（每个模块一个文件夹）
 │   │   │   ├── auth/             认证：注册 / 登录 / 资料 / 安全公告
-│   │   │   ├── lost_found/       失物招领（P0）
+│   │   │   ├── lost_found/       帖子接口（默认失物招领；?type=second_hand 为二手交易）
 │   │   │   ├── common/           字典 / 模块列表 / 上传 / 健康检查
 │   │   │   ├── favorites/        收藏
 │   │   │   ├── reports/          举报
@@ -48,10 +50,10 @@ Project_graduation/
 │   ├── migrations/               Flask-Migrate 迁移目录
 │   ├── scripts/                  开发脚本：dev_init / smoke_test / gen_schema_docs /
 │   │                             upgrade_schema（结构升级）/ migrate_upload_layout（目录迁移）/
-│   │                             fix_media_references（引用修复）/ check_orphans（一致性自检）/
+│   │                             fix_media_references（引用修复）/ fix_media_keys（媒体键清理）/ check_orphans（一致性自检）/ recount（计数对账）/
 │   │                             fix_ps1_bom（脚本编码修复）/ verify_media_storage
-│   ├── tests/                    pytest 用例（107 个）
-│   │                             含结构收口、媒体地址一致性、视频语音上传、序列化字段完整性
+│   ├── tests/                    pytest 用例（113 个）
+│   │                             含结构收口、互动/撤回、热度排序、计数对账、媒体清理、序列化字段完整性
 │   ├── uploads/                  上传的媒体文件（按 <学号>/<日期> 分目录）
 │   ├── requirements.txt
 │   ├── .env.example
@@ -61,14 +63,15 @@ Project_graduation/
 │   ├── scripts/                  check-messagebox.js（静态检查未处理的 MessageBox 调用）
 │   ├── src/
 │   │   ├── api/                  接口封装（request 拦截器 + 各模块地址）
-│   │   ├── components/           PostCard 等复用组件
+│   │   ├── config/               模块发布表单配置（moduleForms.js，统一发布页使用）
+│   │   ├── components/           PostCard / CommentSection / CommentComposer / VoiceRecorder 等复用组件
 │   │   ├── layouts/              PublicLayout / UserLayout / AdminLayout
 │   │   ├── router/               路由表 + 登录与管理员守卫
-│   │   ├── stores/               Pinia：user / app / notification
+│   │   ├── stores/               Pinia：user / app / notification / message
 │   │   ├── styles/               全局样式（PC 优先 + 移动端自适应）
 │   │   ├── utils/                时间格式化、状态标签、剪贴板等
 │   │   └── views/
-│   │       ├── user/             首页 / 列表 / 详情 / 发布编辑 / 我的发布 / 收藏 / 通知 / 个人中心
+│   │       ├── user/             首页 / 列表 / 详情 / 统一发布编辑 / 我的发布 / 收藏 / 私信 / 通知 / 个人中心
 │   │       └── admin/            概览 / 审核台 / 内容 / 用户 / 用户详情 / 模块 / 回收站 / 举报 / 日志 / 配置
 │   ├── package.json
 │   ├── vite.config.js            @ 别名 + /api 代理到后端
@@ -76,6 +79,7 @@ Project_graduation/
 ├── docs/
 │   ├── API.md                    接口文档（含错误码、配置项、权限矩阵）
 │   ├── DATA.md                   数据存储与备份说明（数据到底存在哪）
+│   ├── AUDIT.md                  底层结构审计报告（定期体检 + 待办问题跟踪）
 │   ├── ER.md                     ER 图（Mermaid，自动生成）
 │   ├── schema_mysql.sql          MySQL 建表脚本（部署）
 │   └── schema_sqlite.sql         SQLite 建表脚本（开发）
@@ -199,18 +203,31 @@ pnpm preview          # 本地预览构建产物
 # ---------- 后端 ----------
 cd backend
 
-# 单元 / 接口测试（内存库，107 个用例）
+# 单元 / 接口测试（内存库，113 个用例）
 .\.venv\Scripts\python.exe -m pytest tests -q
 
-# 端到端冒烟（需先启动后端服务，54 项断言）
+# 端到端冒烟（需先启动后端服务，55 项断言）
 .\.venv\Scripts\python.exe scripts\smoke_test.py
 
 # 结构升级（改了模型 / 拉了新代码后执行；幂等，只加列不删数据）
 .\.venv\Scripts\python.exe scripts\upgrade_schema.py --check   # 先预演
 .\.venv\Scripts\python.exe scripts\upgrade_schema.py
 
-# 数据一致性自检（孤儿指针 + 孤儿文件）
+# 计数对账（只报告，不修改）
+.\.venv\Scripts\python.exe scripts\recount.py
+
+# 计数对账并自动回写修正
+.\.venv\Scripts\python.exe scripts\recount.py --fix
+
+# 数据一致性自检（孤儿指针 + 孤儿文件 + 未提交上传）
 .\.venv\Scripts\python.exe scripts\check_orphans.py
+
+# 一致性自检后清理孤儿文件，并清理 24 小时未提交的上传
+.\.venv\Scripts\python.exe scripts\check_orphans.py --clean --unattached-hours 24
+
+# 修剪三处 media JSON 的多余键（历史数据里的 user_dir 等）
+.\.venv\Scripts\python.exe scripts\fix_media_keys.py --check
+.\.venv\Scripts\python.exe scripts\fix_media_keys.py
 
 # 改动模型后同步生成建表 SQL 与 ER 图
 .\.venv\Scripts\python.exe scripts\gen_schema_docs.py
@@ -225,8 +242,21 @@ pnpm run check
 pnpm run build
 ```
 
-已验证结果：**pytest 107 passed**，**HTTP 冒烟 54/54 通过**，**`pnpm run check` 0 处问题**，
+已验证结果：**pytest 113 passed**，**HTTP 冒烟 55/55 通过**，**`pnpm run check` 0 处问题**，
 **前端 `vite build` 成功**，Vite 开发代理 `/api` → Flask 联通。
+
+> **计数对账**：`scripts/recount.py` 会重算帖子/评论的 `like_count`、`comment_count`、
+> `favorite_count`、`reply_count` 并与数据库比对；加 `--fix` 自动回写。
+>
+> **媒体清理**：管理端首页「媒体存储」卡片可一键清理；命令行等价于
+> `check_orphans.py --clean --unattached-hours 24`，会删除磁盘孤儿文件，
+> 以及超过 24 小时仍未归属到帖子/评论/私信的临时上传。
+>
+> **热度排序**：列表 `sort=hot` 使用「浏览 + 评论×3 + 点赞×2 + 收藏×2」
+> 并做 24 小时时间衰减，算法见 `app/utils/hot_score.py`。
+>
+> **结构体检**：底层结构（表/字段/索引/外键/计数/媒体）的定期审计结果与待办问题
+> 见 [docs/AUDIT.md](docs/AUDIT.md)。每次改表或加模块后建议追加一节，便于回看问题是否收敛。
 
 ---
 
@@ -236,7 +266,7 @@ pnpm run build
 |---|---|---|
 | 认证 | `/api/v1/auth` | 验证码 / 注册 / 登录 / 资料 / 安全公告 |
 | 公共 | `/api/v1/common` | 字典 / 模块 / 配置 / 上传 / 健康检查 |
-| 失物招领 | `/api/v1/lost_found` | 列表 / 详情 / 发布 / 编辑 / 删除 / 状态 / 我的发布 |
+| 帖子（失物招领 / 二手交易） | `/api/v1/lost_found` | 列表 / 详情 / 发布 / 编辑 / 删除 / 状态；`?type=` 切换模块（默认 lost_found） |
 | 收藏 | `/api/v1/favorites` | 收藏切换与列表 |
 | 举报 | `/api/v1/reports` | 提交举报 / 我的举报 |
 | 通知 | `/api/v1/notifications` | 列表 / 未读数 / 已读 |
@@ -296,6 +326,10 @@ pnpm run build
 
 存的是 **JSON 数组**，每项结构如下（由上传接口返回，数据库不存文件本身）。
 **评论与私信的媒体用的是完全相同的结构**，因此存储、上传、展示三层都能复用：
+
+> v1.2 起 `posts.media` / `comments.media` / `messages.media` 落库前都会统一裁剪为
+> `id / url / path / name / type / size / mime` 七个键；上传接口返回的 `user_dir`
+> 等调试字段不会写进数据库。
 
 ```json
 [
@@ -359,8 +393,21 @@ pnpm run build
 {}
 ```
 
-前端按 `type` 渲染不同表单与展示样式，后端只做透传存取，
-**新增模块不需要改数据库、不需要改接口签名**。
+前端按 `type` 渲染不同表单与展示样式，后端做统一校验与存储。
+
+> v1.3 已落地**二手交易**：
+> `type='second_hand'`，`ext_json` 必填 `price`，可选 `original_price / condition / trade_type`；
+> 发布页、列表卡片、详情页都会展示价格与成色。
+>
+> 发布逻辑已统一：所有入口都进入 `/publish`，不需要带 `?type=`；
+> 页面标题固定「发布信息」，用户通过「选择发布类型」自选模块；
+> 切换模块时保留通用字段（标题 / 描述 / 图片 / 地点 / 联系方式），
+> 清空时间与专属字段，切回不再恢复；成功发布后回到「我的发布」。
+>
+> 二手交易状态文案为 `在售中 / 已售出 / 已过期 / 已下架`，且**交易时间必填**。
+> **新增模块不需要改数据库、不需要改接口签名**。
+>
+> 发布页的模块字段配置集中在前端 `frontend/src/config/moduleForms.js`；未登记模块自动走 `default`。
 
 ### 5.5 帖子与「评论 / 点赞 / 收藏」的关系
 
@@ -480,6 +527,23 @@ erDiagram
 
 ---
 
+### 5.10 热度排序（hot 排序器）
+
+帖子列表的 `sort=hot` 不再等于浏览量排序，而是综合互动热度：
+
+```text
+基础分 = 浏览数*1 + 评论数*3 + 点赞数*2 + 收藏数*2
+热度   = 基础分 / (1 + 发帖时长(小时) / 24)
+```
+
+- 评论 > 点赞 / 收藏 > 浏览，体现有人讨论比被看一眼更有价值；
+- 时间衰减：每过 24 小时热度约减半，避免老帖长期霸榜；
+- 锚点时间优先用 `happened_at`，没有则用 `created_at`；
+- 置顶帖子仍然优先显示；
+- 实现集中在 `app/utils/hot_score.py`，前端排序选项文案为「最热（综合互动）」。
+
+---
+
 ## 六、关键设计说明（答辩要点）
 
 1. **统一响应结构**：所有接口返回 `{code, msg, data}`，前端 axios 拦截器统一拆包与报错，
@@ -524,6 +588,11 @@ erDiagram
     私信普通删除用 `sender_deleted` / `receiver_deleted` 做单侧隐藏，双方都删除后自动物理清理。
     **新增这些能力没有修改任何表结构**。
 
+12. **统一发布入口 + 模块配置化（v1.3）**：所有发布入口只跳 `/publish`，页面标题固定「发布信息」；
+    用户通过「选择发布类型」自选模块，默认记住上次选择；通用字段跨模块保留，
+    时间与模块专属字段切换时清空且不恢复；模块字段由 `moduleForms.js` 配置驱动，
+    未登记模块自动走 `default`；后端 `validate_module_ext()` 仍然是权威校验。
+
 ---
 
 ## 七、迭代计划
@@ -533,7 +602,7 @@ erDiagram
 | v1.0 原型 | 登录注册、角色权限、失物招领、管理员用户/帖子列表、审核、回收站、日志、收藏、举报、通知 | ✅ 已完成 |
 | v1.1 | 结构收口（楼中楼评论字段、评论/私信媒体、点赞独立建表、音频支持、结构升级脚本） | ✅ 已完成（表结构与迁移脚本就绪） |
 | v1.2 | 评论发表/回复/语音（楼中楼）、评论点赞、帖子点赞、私信收发/已读/撤回、评论与私信删除收口、互动通知 | ✅ 已完成 |
-| v1.3 | 模块管理增强、二手交易 / 组队打车 / 交友三类模块（填 `ext_json` + 前端表单即可） | 模块骨架已就绪 |
+| v1.3 | 模块管理增强、二手交易 / 组队打车 / 交友三类模块（填 `ext_json` + 前端表单即可） | 进行中：二手交易已上线，组队 / 交友待做 |
 | v2.0 | 移动端拆分、多级管理员（RBAC 生效）、Docker 部署上线 | 表与常量已预留 |
 
 > **v1.2 为什么能"填"得很快**：评论的楼中楼、媒体、点赞字段全部已经建好

@@ -61,10 +61,9 @@ def default_modules():
             'code': 'second_hand',
             'name': '二手交易',
             'icon': 'ShoppingCart',
-            'description': '闲置物品买卖（v1.3 开放）',
-            # 默认关闭：模块骨架已就位，管理员在后台一键启用即可
+            'description': '闲置物品买卖（v1.3 已实现，ext_json 承载价格/成色/交易方式）',
             'sort_order': 20,
-            'enabled': False,
+            'enabled': True,
             'is_system': False,
         },
         {

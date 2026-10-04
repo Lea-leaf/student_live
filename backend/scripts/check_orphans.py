@@ -17,7 +17,12 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app import create_app  # noqa: E402
-from app.utils.cleanup import check_orphans, media_orphan_files  # noqa: E402
+from app.utils.cleanup import (  # noqa: E402
+    check_orphans,
+    clean_unused_uploads,
+    media_orphan_files,
+    unattached_upload_files,
+)
 
 
 def human_size(num):
@@ -30,7 +35,10 @@ def human_size(num):
 
 def main():
     parser = argparse.ArgumentParser(description='数据一致性自检')
-    parser.add_argument('--clean', action='store_true', help='删除孤儿文件（磁盘上的无用文件）')
+    parser.add_argument('--clean', action='store_true',
+                        help='删除孤儿文件，并清理超过保留时间的未提交上传（记录 + 磁盘文件）')
+    parser.add_argument('--unattached-hours', type=int, default=24,
+                        help='未提交上传的保留小时数，默认 24（配合 --clean 使用）')
     args = parser.parse_args()
 
     app = create_app(os.getenv('FLASK_CONFIG', 'development'))
@@ -76,7 +84,29 @@ def main():
 
         print()
         print('=' * 72)
-        healthy = not problems and not orphans
+        print()
+        print('=' * 72)
+        print('3. 未提交上传检查（upload_files 无归属且超过保留时间）')
+        print('=' * 72)
+        unattached = unattached_upload_files(hours=args.unattached_hours)
+        unattached_bytes = sum(int(item.size or 0) for item in unattached)
+        if not unattached:
+            print('  \u2713 未发现超过保留时间的未提交上传')
+        else:
+            print(f'  发现 {len(unattached)} 条，合计 {human_size(unattached_bytes)}，'
+                  f'保留时间 {args.unattached_hours} 小时：')
+            for item in unattached[:20]:
+                print(f'    {item.path}  ({human_size(item.size or 0)})')
+            if len(unattached) > 20:
+                print(f'    ...（还有 {len(unattached) - 20} 条）')
+            if args.clean:
+                stats = clean_unused_uploads(hours=args.unattached_hours)
+                print(f'\n  已清理未提交上传 {stats["records"]} 条，删除磁盘文件 {stats["removed_files"]} 个，'
+                      f'释放 {human_size(stats["bytes"])}')
+            else:
+                print('\n  提示：加 --clean 可清理这些未提交上传。')
+        orphans_remaining = 0 if args.clean else len(orphans)
+        healthy = not problems and orphans_remaining == 0
         print('结论：' + ('数据一致，无孤儿 ✓' if healthy else '存在问题，见上方报告'))
         print('=' * 72)
         return 0 if healthy else 1

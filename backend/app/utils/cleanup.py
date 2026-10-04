@@ -21,6 +21,8 @@
 """
 
 import contextlib
+import json
+from datetime import datetime, timedelta
 
 from flask import current_app
 
@@ -436,12 +438,48 @@ def check_orphans():
     return problems
 
 
+def _media_json_paths():
+    """收集 posts / comments / messages 三处 media JSON 里的媒体相对路径。"""
+    known = set()
+
+    def collect(raw):
+        try:
+            items = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            return
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            rel_path = str(item.get('path') or '').replace('\\', '/').lstrip('/')
+            if rel_path:
+                known.add(rel_path)
+            url = str(item.get('url') or '').replace('\\', '/')
+            for marker in ('/files/', 'files/'):
+                if marker in url:
+                    rel_from_url = url.split(marker, 1)[1].lstrip('/')
+                    if rel_from_url:
+                        known.add(rel_from_url)
+                    break
+
+    for model in (Post, Comment, Message):
+        rows = db.session.query(model.media).filter(model.media.isnot(None)).all()
+        for (raw,) in rows:
+            collect(raw)
+    return known
+
+
+def _known_media_paths():
+    """媒体已知被引用路径：upload_files 记录 + 三处 media JSON。"""
+    known = {row[0] for row in db.session.query(UploadFile.path).all() if row[0]}
+    return known | _media_json_paths()
+
+
 def media_orphan_files():
-    """找出磁盘上存在但没有数据库记录引用的文件（孤儿文件）。"""
+    """找出磁盘上存在但数据库任何地方都没有引用的文件（孤儿文件）。"""
     import os
 
     root = upload_utils._upload_root()  # noqa: SLF001 - 内部工具，集中在此使用
-    known = {row.path for row in db.session.query(UploadFile.path).all()}
+    known = _known_media_paths()
     orphans = []
     for dirpath, _dirnames, filenames in os.walk(root):
         for filename in filenames:
@@ -455,5 +493,59 @@ def media_orphan_files():
     return orphans
 
 
+def unattached_upload_files(hours=24, now=None):
+    """未提交业务的临时上传：upload_files 里没有任何归属、且超过保留时长。
+
+    用户先调 /common/upload 拿到 media，但最终没有发帖 / 评论 / 私信时，
+    记录会一直挂在 upload_files 里。超过 `hours` 小时仍未归属的视为临时文件。
+    """
+    cutoff = (now or datetime.now()) - timedelta(hours=max(int(hours or 0), 0))
+    media_json_paths = _media_json_paths()  # 兼容历史数据：media JSON 里仍引用则不能删
+    query = UploadFile.query.filter(
+        db.or_(UploadFile.owner_type.is_(None), UploadFile.owner_id.is_(None)),
+        UploadFile.post_id.is_(None),
+        UploadFile.created_at < cutoff,
+    ).order_by(UploadFile.id.asc())
+    return [row for row in query.all() if row.path not in media_json_paths]
+
+
+def clean_unused_uploads(hours=24, now=None):
+    """删除超过保留时长的未提交上传：数据库记录 + 磁盘文件。"""
+    rows = unattached_upload_files(hours=hours, now=now)
+    paths = [row.path for row in rows if row.path]
+    total_bytes = sum(int(row.size or 0) for row in rows)
+
+    for row in rows:
+        db.session.delete(row)
+    if rows:
+        db.session.commit()
+
+    removed_files = upload_utils.delete_media_by_paths(paths) if paths else 0
+    return {
+        'records': len(rows),
+        'files': len(paths),
+        'removed_files': removed_files,
+        'bytes': total_bytes,
+        'hours': max(int(hours or 0), 0),
+    }
+
+
+def clean_unused_media(hours=24):
+    """管理端清理未引用媒体：未提交上传 + 磁盘孤儿文件一起清。"""
+    unattached = clean_unused_uploads(hours=hours)
+    orphans = media_orphan_files()
+    orphan_bytes = sum(int(item.get('size') or 0) for item in orphans)
+    orphan_paths = [item['path'] for item in orphans if item.get('path')]
+    orphan_removed = upload_utils.delete_media_by_paths(orphan_paths) if orphan_paths else 0
+
+    return {
+        'unattached': unattached,
+        'orphan_count': len(orphans),
+        'orphan_removed': orphan_removed,
+        'orphan_bytes': orphan_bytes,
+    }
+
+
 __all__ = ['purge_post', 'purge_comment', 'purge_message', 'purge_user',
-           'check_orphans', 'media_orphan_files']
+           'check_orphans', 'media_orphan_files', 'unattached_upload_files',
+           'clean_unused_uploads', 'clean_unused_media']

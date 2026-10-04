@@ -13,7 +13,9 @@ from ..extensions import db
 from ..models import Comment, LoginLog, Module, Post, Report, User
 from ..utils.auth import admin_required
 from ..utils.constants import AUDIT_PENDING, REPORT_PENDING, STATUS_BANNED
+from ..utils.logger import write_operation_log
 from ..utils.response import success
+from ..utils.validators import ValidationError, as_error, get_int
 
 bp = Blueprint('admin_dashboard', __name__)
 
@@ -117,11 +119,12 @@ def media_storage():
     配合「数据按用户分目录存放」的设计，管理员可以在这里看清
     每个用户占了多少空间，也便于发现异常占用。
     """
-    from ..utils.cleanup import media_orphan_files
+    from ..utils.cleanup import media_orphan_files, unattached_upload_files
     from ..utils.uploads import media_stats
 
     stats = media_stats()
     orphans = media_orphan_files()
+    unattached = unattached_upload_files(hours=24)
 
     # 把目录名（学号）关联到用户名，便于阅读
     dir_names = [item['dir'] for item in stats['dirs']]
@@ -140,4 +143,34 @@ def media_storage():
         'users': stats['dirs'],
         'orphan_files': orphans[:50],
         'orphan_count': len(orphans),
+        'unattached_files': [
+            {
+                'id': row.id,
+                'path': row.path,
+                'size': row.size,
+                'created_at': row.created_at.strftime('%Y-%m-%d %H:%M:%S')
+                if row.created_at else None,
+            }
+            for row in unattached[:50]
+        ],
+        'unattached_count': len(unattached),
+        'unattached_hours': 24,
     })
+
+
+@bp.post('/dashboard/media/clean')
+@admin_required
+def clean_media():
+    """清理未引用媒体：未提交上传 + 磁盘孤儿文件。
+
+    查询参数 / JSON 字段 `hours`：未提交上传的保留时长，默认 24 小时。
+    """
+    from ..utils.cleanup import clean_unused_media
+
+    try:
+        hours = get_int('hours', 24, minimum=1, maximum=24 * 30)
+        stats = clean_unused_media(hours=hours)
+        write_operation_log('clean_media', module='media', detail=stats)
+        return success(stats, msg='媒体清理完成')
+    except ValidationError as exc:
+        return as_error(exc)

@@ -84,6 +84,7 @@ function goModule(code) {
 }
 
 function goPublish() {
+  // 统一发布入口：不预设类型，由发布页「选择发布类型」决定
   router.push({ name: 'post-create' })
 }
 

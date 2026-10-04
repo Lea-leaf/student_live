@@ -33,11 +33,26 @@ const query = reactive({
 /** 模块：目前只有失物招领有完整业务，其他模块按启用状态显示 */
 const activeModule = computed(() => String(route.query.type || 'lost_found'))
 
-const statusOptions = computed(() => appStore.enums.post_status || [
-  { value: 'ongoing', label: '进行中' },
-  { value: 'claimed', label: '已认领' },
-  { value: 'expired', label: '已过期' }
-])
+const SECOND_HAND_STATUS_LABELS = {
+  ongoing: '在售中',
+  claimed: '已售出',
+  expired: '已过期',
+  closed: '已下架'
+}
+
+const statusOptions = computed(() => {
+  const list = appStore.enums.post_status || [
+    { value: 'ongoing', label: '进行中' },
+    { value: 'claimed', label: '已认领' },
+    { value: 'expired', label: '已过期' },
+    { value: 'closed', label: '已关闭' }
+  ]
+  if (activeModule.value !== 'second_hand') return list
+  return list.map((item) => ({
+    ...item,
+    label: SECOND_HAND_STATUS_LABELS[item.value] || item.label
+  }))
+})
 
 onMounted(() => {
   query.keyword = String(route.query.keyword || '')
@@ -58,7 +73,8 @@ async function load() {
     const params = {
       page: query.page,
       size: query.size,
-      sort: query.sort
+      sort: query.sort,
+      type: activeModule.value
     }
     if (query.keyword) params.keyword = query.keyword
     if (query.status) params.status = query.status
@@ -157,7 +173,7 @@ function switchModule(code) {
         </el-select>
         <el-select v-model="query.sort" style="width: 140px">
           <el-option label="最新发布" value="latest" />
-          <el-option label="最多浏览" value="hot" />
+          <el-option label="最热（综合互动）" value="hot" />
           <el-option label="最早发布" value="oldest" />
         </el-select>
         <el-button type="primary" @click="onSearch">搜索</el-button>

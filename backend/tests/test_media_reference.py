@@ -93,6 +93,12 @@ def test_post_media_matches_upload_record(client, app, student_token, upload_roo
         assert len(post_media) == 1
         item = post_media[0]
 
+        # P2 回归：posts.media 只能有统一约定的键，不能把 user_dir 存进来
+        from app.utils.uploads import CANONICAL_MEDIA_KEYS
+
+        assert set(item.keys()) == set(CANONICAL_MEDIA_KEYS), item
+        assert 'user_dir' not in item
+
         assert NEW_LAYOUT.match(item['path']), f'帖子 media 路径不是新布局：{item["path"]}'
         assert not LEGACY_LAYOUT.match(item['path']), (
             f'帖子 media 残留旧布局地址：{item["path"]}（这正是当初 404 的原因）'

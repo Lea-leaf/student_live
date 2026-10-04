@@ -14,6 +14,7 @@ from ..utils.constants import (
     AUDIT_APPROVED,
     AUDIT_PENDING,
     AUDIT_REJECTED,
+    MODULE_SECOND_HAND,
     POST_CLAIMED,
     POST_CLOSED,
     POST_EXPIRED,
@@ -136,13 +137,74 @@ def pending_audit_query(post_type=None):
 
 
 # ---------------------------------------------------------------------------
+# 扩展字段校验
+# ---------------------------------------------------------------------------
+#: ext_json 最大字节数，防止把 ext 当数据库用
+MAX_EXT_JSON_BYTES = 4096
+
+
+def normalize_ext(value):
+    """校验模块扩展字段：必须是 JSON 对象、可序列化、体积受限。"""
+    if value in (None, '', {}):
+        return {}
+    if not isinstance(value, dict):
+        raise ValidationError('扩展字段 ext 必须是 JSON 对象')
+    try:
+        encoded = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        raise ValidationError('扩展字段 ext 含有无法序列化的数据') from None
+    if len(encoded.encode('utf-8')) > MAX_EXT_JSON_BYTES:
+        raise ValidationError(f'扩展字段 ext 不能超过 {MAX_EXT_JSON_BYTES} 字节')
+    return value
+
+
+def validate_module_ext(module_code, value):
+    """先做通用 ext 校验，再按模块做差异化校验。"""
+    ext = normalize_ext(value)
+    if module_code == MODULE_SECOND_HAND:
+        if ext.get('price') in (None, ''):
+            raise ValidationError('二手交易必须填写价格 price')
+        try:
+            price = float(ext['price'])
+        except (TypeError, ValueError):
+            raise ValidationError('二手交易价格必须是数字') from None
+        if price < 0:
+            raise ValidationError('二手交易价格不能为负数')
+        ext['price'] = round(price, 2)
+
+        for field in ('condition', 'trade_type'):
+            field_value = ext.get(field)
+            if field_value in (None, ''):
+                continue
+            if not isinstance(field_value, str):
+                raise ValidationError(f'二手交易字段 {field} 必须是字符串')
+            if len(field_value) > 32:
+                raise ValidationError(f'二手交易字段 {field} 不能超过 32 字')
+        original = ext.get('original_price')
+        if original not in (None, ''):
+            try:
+                ext['original_price'] = round(float(original), 2)
+            except (TypeError, ValueError):
+                raise ValidationError('二手交易原价必须是数字') from None
+    return ext
+
+
+# ---------------------------------------------------------------------------
 # 持久化
 # ---------------------------------------------------------------------------
 def save_post(post, media=None, ext=None, commit=True):
-    """保存帖子，媒体与扩展字段以 JSON 存储。"""
+    """保存帖子，媒体与扩展字段以 JSON 存储。
+
+    media 会先经过 `canonical_media_list` 裁剪，只落库统一约定的媒体字段，
+    避免上传接口返回的 `user_dir` 等调试字段混进 `posts.media`。
+    """
+    from ..utils.uploads import canonical_media_list
+
     if media is not None:
+        media = canonical_media_list(media)
         post.media = json.dumps(media, ensure_ascii=False) if media else None
     if ext is not None:
+        ext = validate_module_ext(post.type, ext)
         post.ext_json = json.dumps(ext, ensure_ascii=False) if ext else None
     db.session.add(post)
     if commit:
@@ -234,4 +296,5 @@ __all__ = [
     'STATUS_TRANSITIONS', 'can_transition', 'apply_status', 'approve', 'reject',
     'pending_audit_query', 'save_post', 'build_post', 'attach_media', 'bump_view',
     'soft_delete', 'purge_overflow', 'recycle_bin_query',
+    'normalize_ext', 'validate_module_ext', 'MAX_EXT_JSON_BYTES',
 ]

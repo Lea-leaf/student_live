@@ -2,6 +2,11 @@
 
 > 本文回答一个容易误解的问题：**这个项目的用户数据到底存在哪里？**
 > 结论先说：**业务数据全在数据库文件里，媒体文件才放磁盘、库里只存路径。**
+>
+> **相关文档**：
+> - [AUDIT.md](AUDIT.md) —— 底层结构的定期审计报告与待办问题跟踪（结构是否健康、能否支撑后续需求）
+> - [ER.md](ER.md) —— 表结构图（自动生成）
+> - [API.md](API.md) —— 接口文档
 
 ---
 
@@ -157,7 +162,7 @@ cd backend
 
 ## 五、数据一致性自检
 
-两个脚本用于检查「孤儿指针」与「孤儿文件」：
+几个脚本用于检查「孤儿指针」「孤儿文件」与媒体键一致性：
 
 ```powershell
 cd backend
@@ -166,7 +171,11 @@ cd backend
 .\.venv\Scripts\python.exe scripts\check_orphans.py
 
 # 顺带删除孤儿文件（释放空间）
-.\.venv\Scripts\python.exe scripts\check_orphans.py --clean
+.\.venv\Scripts\python.exe scripts\check_orphans.py --clean --unattached-hours 24
+
+# 修剪 posts/comments/messages 的 media JSON 多余键（如 user_dir）
+.\.venv\Scripts\python.exe scripts\fix_media_keys.py --check   # 预演
+.\.venv\Scripts\python.exe scripts\fix_media_keys.py           # 执行
 
 # 上传目录布局迁移（旧的 日期/文件 结构 → 学号/日期/文件）
 .\.venv\Scripts\python.exe scripts\migrate_upload_layout.py --check   # 预演

@@ -75,6 +75,16 @@ MODULE_OTHER = 'other'
 #: 兜底模块：管理员可自由新增模块，未登记的自定义 type 也能工作
 DEFAULT_MODULE_CODE = MODULE_LOST_FOUND
 
+#: 模块差异化状态文案：数据库状态值不变，只在对应模块下换显示标签
+MODULE_STATUS_LABELS = {
+    MODULE_SECOND_HAND: {
+        POST_ONGOING: '在售中',
+        POST_CLAIMED: '已售出',
+        POST_EXPIRED: '已过期',
+        POST_CLOSED: '已下架',
+    },
+}
+
 # ---------------------------------------------------------------------------
 # 通知
 # ---------------------------------------------------------------------------

@@ -19,12 +19,14 @@
 from flask import Blueprint, request
 
 from ...extensions import db
-from ...models import Post
+from ...models import Module, Post
 from ...models.base import paginate
 from ...utils.auth import optional_token, token_required
 from ...utils.config_service import get_config, get_config_int
-from ...utils.constants import MODULE_LOST_FOUND, POST_CLAIMED, POST_STATUSES
+from ...utils.constants import (MODULE_LOST_FOUND, MODULE_SECOND_HAND, MODULE_STATUS_LABELS,
+                                  POST_CLAIMED, POST_STATUSES)
 from ...utils.helpers import current_page_args, guest_can_detail, guest_can_list, keyword_arg, post_audit_enabled
+from ...utils.hot_score import hot_score
 from ...utils.logger import write_operation_log
 from ...utils.response import CODE_FORBIDDEN, CODE_POST_CLOSED, error, paginated, success
 from ...utils.validators import ValidationError, as_error, get_json, parse_datetime, validate_contact
@@ -33,6 +35,31 @@ from .. import posts_service as svc
 bp = Blueprint('lost_found', __name__, url_prefix='/lost_found')
 
 MODULE = MODULE_LOST_FOUND
+
+
+def _resolve_module_code(default=MODULE):
+    """从查询串解析模块 code，并确认模块存在且已启用。"""
+    code = (request.args.get('type') or '').strip() or default
+    module = Module.query.filter_by(code=code, enabled=True).first()
+    if module is None:
+        raise ValidationError('模块不存在或未启用', 1001)
+    return code
+
+
+def _extract_module_code(data, default=MODULE):
+    """从请求体（JSON / 表单）解析模块 code，并确认模块存在且已启用。"""
+    code = str(data.get('type') or '').strip() or default
+    module = Module.query.filter_by(code=code, enabled=True).first()
+    if module is None:
+        raise ValidationError('模块不存在或未启用', 1001)
+    return code
+
+
+def _require_second_hand_time(module_code, data):
+    """二手交易必须选择交易时间（happened_at）。"""
+    if module_code == MODULE_SECOND_HAND:
+        if not str(data.get('happened_at') or '').strip():
+            raise ValidationError('二手交易必须选择交易时间', 1001)
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +96,8 @@ def list_posts():
         if mine and user is None:
             return error('请先登录', CODE_FORBIDDEN, http_status=401)
 
-        query = Post.query.filter(Post.type == MODULE)
+        module_code = _resolve_module_code()
+        query = Post.query.filter(Post.type == module_code)
 
         if mine:
             # 我的发布：包含待审核 / 已拒绝 / 已关闭，且包含已软删除的？
@@ -98,8 +126,23 @@ def list_posts():
 
         # 排序：置顶永远在最前
         if sort == 'hot':
-            query = query.order_by(Post.is_top.desc(), Post.view_count.desc(), Post.id.desc())
-        elif sort == 'oldest':
+            # 热度 = 浏览 + 评论3 + 点赞2 + 收藏2，再按 24 小时衰减
+            # 因为跨 SQLite/MySQL 的时间衰减表达式不同，这里在 Python 里算分后排序分页
+            rows = query.all()
+            rows.sort(
+                key=lambda item: (
+                    1 if item.is_top else 0,
+                    hot_score(item),
+                    item.id,
+                ),
+                reverse=True,
+            )
+            total = len(rows)
+            start = (page - 1) * size
+            items = rows[start:start + size]
+            return paginated([item.to_brief() for item in items], total, page, size)
+
+        if sort == 'oldest':
             query = query.order_by(Post.is_top.desc(), Post.id.asc())
         else:
             query = query.order_by(Post.is_top.desc(), Post.id.desc())
@@ -122,7 +165,7 @@ def post_detail(post_id):
 
     try:
         user = current_user()
-        post = svc.get_post(post_id, MODULE)
+        post = svc.get_post(post_id)
         if post is None:
             raise ValidationError('帖子不存在或已删除', 4001)
 
@@ -192,12 +235,14 @@ def create_post():
             data = get_json()
             media = data.get('media') or []
 
-        post = svc.build_post(MODULE, user, data, audit_enabled=post_audit_enabled())
+        module_code = _extract_module_code(data)
+        _require_second_hand_time(module_code, data)
+        post = svc.build_post(module_code, user, data, audit_enabled=post_audit_enabled())
         svc.save_post(post, media=media, ext=data.get('ext'))
         svc.attach_media(post, media)
 
-        write_operation_log('create', module=MODULE, target_type='post', target_id=post.id,
-                            detail={'title': post.title})
+        write_operation_log('create', module=post.type, target_type='post', target_id=post.id,
+                            detail={'title': post.title, 'type': post.type})
 
         msg = '发布成功' if post.audit_status == 'approved' else '发布成功，等待管理员审核后公开'
         return success(post.to_dict(), msg=msg)
@@ -233,7 +278,7 @@ def update_post(post_id):
 
     try:
         user = current_user()
-        post = svc.require_post(post_id, MODULE)
+        post = svc.require_post(post_id)
         if not svc.can_edit(post, user):
             return error('只能编辑自己发布的信息', CODE_FORBIDDEN, http_status=403)
 
@@ -254,13 +299,16 @@ def update_post(post_id):
         if 'ext' in payload:
             svc.save_post(post, ext=payload.get('ext') or {}, commit=False)
 
+        if post.type == MODULE_SECOND_HAND and not post.happened_at:
+            raise ValidationError('二手交易必须选择交易时间', 1001)
+
         # 已通过的帖子被编辑后重新进入待审核（管理员编辑不受影响）
         if not user.is_admin and post_audit_enabled():
             post.audit_status = 'pending'
             post.audit_remark = None
 
         db.session.commit()
-        write_operation_log('update', module=MODULE, target_type='post', target_id=post.id)
+        write_operation_log('update', module=post.type, target_type='post', target_id=post.id)
         return success(post.to_dict(), msg='修改成功')
     except ValidationError as exc:
         return as_error(exc)
@@ -274,11 +322,11 @@ def delete_post(post_id):
 
     try:
         user = current_user()
-        post = svc.require_post(post_id, MODULE)
+        post = svc.require_post(post_id)
         if not svc.can_edit(post, user):
             return error('只能删除自己发布的信息', CODE_FORBIDDEN, http_status=403)
         svc.soft_delete(post, operator=user)
-        write_operation_log('delete', module=MODULE, target_type='post', target_id=post.id)
+        write_operation_log('delete', module=post.type, target_type='post', target_id=post.id)
         return success(msg='已删除，可在管理员回收站中恢复')
     except ValidationError as exc:
         return as_error(exc)
@@ -299,9 +347,10 @@ def my_posts():
         status = (request.args.get('status') or '').strip() or None
         audit_status = (request.args.get('audit_status') or '').strip() or None
 
-        query = Post.query.filter(
-            Post.type == MODULE, Post.user_id == user.id, Post.is_deleted.is_(False)
-        )
+        query = Post.query.filter(Post.user_id == user.id, Post.is_deleted.is_(False))
+        module_code = (request.args.get('type') or '').strip()
+        if module_code:
+            query = query.filter(Post.type == module_code)
         if status:
             query = query.filter(Post.status == status)
         if audit_status:
@@ -330,7 +379,7 @@ def update_status(post_id):
 
     try:
         user = current_user()
-        post = svc.require_post(post_id, MODULE)
+        post = svc.require_post(post_id)
         if not svc.can_edit(post, user):
             return error('只能修改自己发布的信息状态', CODE_FORBIDDEN, http_status=403)
 
@@ -339,11 +388,12 @@ def update_status(post_id):
         if target not in POST_STATUSES:
             raise ValidationError(f'状态取值非法，可选：{" / ".join(POST_STATUSES)}')
 
+        labels = MODULE_STATUS_LABELS.get(post.type, POST_STATUS_LABELS)
         svc.apply_status(post, target, operator=user, reason=payload.get('reason'))
         db.session.commit()
-        write_operation_log('update_status', module=MODULE, target_type='post', target_id=post.id,
+        write_operation_log('update_status', module=post.type, target_type='post', target_id=post.id,
                             detail={'status': target})
-        return success(post.to_dict(), msg=f'已标记为「{POST_STATUS_LABELS.get(target, target)}」')
+        return success(post.to_dict(), msg=f'已标记为「{labels.get(target, target)}」')
     except ValidationError as exc:
         return as_error(exc)
 
@@ -356,13 +406,15 @@ def claim_post(post_id):
 
     try:
         user = current_user()
-        post = svc.require_post(post_id, MODULE)
+        post = svc.require_post(post_id)
         if not svc.can_edit(post, user):
             return error('只能操作自己发布的信息', CODE_FORBIDDEN, http_status=403)
+        labels = MODULE_STATUS_LABELS.get(post.type, {POST_CLAIMED: '已认领'})
         svc.apply_status(post, POST_CLAIMED, operator=user)
         db.session.commit()
-        write_operation_log('claim', module=MODULE, target_type='post', target_id=post.id)
-        return success(post.to_dict(), msg='已标记为「已认领」，该信息不再可查看详情')
+        write_operation_log('claim', module=post.type, target_type='post', target_id=post.id)
+        return success(post.to_dict(),
+                       msg=f'已标记为「{labels.get(POST_CLAIMED, "已认领")}」，该信息不再可查看详情')
     except ValidationError as exc:
         return as_error(exc)
 
@@ -373,21 +425,36 @@ def claim_post(post_id):
 @bp.get('/meta')
 def module_meta():
     """模块元信息：状态字典、字段要求、公告等，供前端渲染筛选器。"""
-    from ...utils.constants import AUDIT_STATUS_LABELS, POST_STATUS_LABELS
+    from ...utils.constants import (AUDIT_STATUS_LABELS, MODULE_SECOND_HAND,
+                                    MODULE_STATUS_LABELS, POST_STATUS_LABELS)
 
+    try:
+        module_code = _resolve_module_code()
+    except ValidationError as exc:
+        return as_error(exc)
+
+    fields = {
+        'title': {'required': False, 'label': '标题'},
+        'content': {'required': False, 'label': '描述'},
+        'media': {'required': False, 'label': '图片/视频'},
+        'location': {'required': False, 'label': '地点'},
+        'happened_at': {'required': False, 'label': '时间'},
+        'contact': {'required': True, 'label': '联系方式', 'public': True},
+    }
+    if module_code == MODULE_SECOND_HAND:
+        fields.update({
+            'price': {'required': True, 'label': '价格（元）', 'type': 'number'},
+            'condition': {'required': False, 'label': '成色', 'type': 'string'},
+            'trade_type': {'required': False, 'label': '交易方式', 'type': 'string'},
+            'original_price': {'required': False, 'label': '原价（元）', 'type': 'number'},
+        })
+    status_labels = MODULE_STATUS_LABELS.get(module_code, POST_STATUS_LABELS)
     return success({
-        'module': MODULE,
+        'module': module_code,
         'name': get_config('site_name', '校园生活平台'),
-        'statuses': [{'value': key, 'label': label} for key, label in POST_STATUS_LABELS.items()],
+        'statuses': [{'value': key, 'label': label} for key, label in status_labels.items()],
         'audit_statuses': [{'value': key, 'label': label} for key, label in AUDIT_STATUS_LABELS.items()],
-        'fields': {
-            'title': {'required': False, 'label': '标题'},
-            'content': {'required': False, 'label': '描述'},
-            'media': {'required': False, 'label': '图片/视频'},
-            'location': {'required': False, 'label': '地点'},
-            'happened_at': {'required': False, 'label': '时间'},
-            'contact': {'required': True, 'label': '联系方式', 'public': True},
-        },
+        'fields': fields,
         'audit_enabled': post_audit_enabled(),
     })
 

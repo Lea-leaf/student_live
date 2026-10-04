@@ -239,6 +239,22 @@ def save_media_list(files, user=None, user_id=None, post_id=None):
     return media, errors
 
 
+#: 统一媒体 JSON 的键，避免调试字段（如 user_dir）混入数据库
+CANONICAL_MEDIA_KEYS = ('id', 'url', 'path', 'name', 'type', 'size', 'mime')
+
+
+def canonical_media_list(items):
+    """裁剪 media JSON：只保留统一约定的字段，保证三处媒体结构一致。"""
+    if not isinstance(items, list):
+        return []
+    cleaned = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cleaned.append({key: item[key] for key in CANONICAL_MEDIA_KEYS if key in item})
+    return cleaned
+
+
 def _relative_from_media_item(item):
     """从已上传文件的 [{url,path}] 结构中提取相对路径（供二次校验用）。"""
     prefix = current_app.config.get('API_PREFIX', '/api/v1').rstrip('/') + '/files/'
@@ -458,6 +474,7 @@ __all__ = [
     'build_relative_path',
     'save_media',
     'save_media_list',
+    'canonical_media_list',
     'sanitize_media_list',
     'attach_upload_owners',
     'send_upload_file',

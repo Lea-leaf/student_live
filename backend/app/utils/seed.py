@@ -8,6 +8,7 @@
 数据是「确定性」的（固定随机种子），每次生成结果一致，方便复现问题。
 """
 
+import json
 import random
 from datetime import datetime, timedelta
 
@@ -35,6 +36,7 @@ from ..utils.constants import (
     AUDIT_PENDING,
     AUDIT_REJECTED,
     MODULE_LOST_FOUND,
+    MODULE_SECOND_HAND,
     POST_CLAIMED,
     POST_CLOSED,
     POST_EXPIRED,
@@ -197,6 +199,36 @@ def run_seed(reset=False):
         if audit == AUDIT_APPROVED:
             post.audited_by = admin.id
             post.audited_at = post.created_at + timedelta(hours=2)
+        db.session.add(post)
+        posts.append(post)
+
+    # ---- 二手交易演示数据：验证 ext_json 真实落库与回读 ----
+    second_hand_items = [
+        ('出九成新自行车', '骑了半年，平时都停宿舍楼下，刹车刚保养过。',
+         {'price': 260, 'original_price': 480, 'condition': '九成新', 'trade_type': '面交'}),
+        ('出闲置台灯', '毕业搬宿舍带不走，三档亮度，功能一切正常。',
+         {'price': 25, 'original_price': 59, 'condition': '八成新', 'trade_type': '面交'}),
+        ('收一个二手键盘', '想收一把 87 键机械键盘，能正常使用就行，价格好商量。',
+         {'price': 80, 'condition': '不限', 'trade_type': '都可以'}),
+    ]
+    for index, (title, content, ext) in enumerate(second_hand_items):
+        author = students[(index + 3) % len(students)]
+        post = Post(
+            type=MODULE_SECOND_HAND,
+            user_id=author.id,
+            title=title,
+            content=content,
+            ext_json=json.dumps(ext, ensure_ascii=False),
+            happened_at=now + timedelta(days=index + 1, hours=10),
+            location=rnd.choice(LOCATIONS),
+            contact=rnd.choice(CONTACTS),
+            status=POST_ONGOING,
+            audit_status=AUDIT_APPROVED,
+            audited_by=admin.id,
+            audited_at=now - timedelta(hours=rnd.randint(2, 30)),
+            view_count=rnd.randint(5, 120),
+            created_at=now - timedelta(days=rnd.randint(0, 6), hours=rnd.randint(0, 20)),
+        )
         db.session.add(post)
         posts.append(post)
 

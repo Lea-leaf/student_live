@@ -47,6 +47,16 @@ const canManage = computed(() => {
 
 const canClaim = computed(() => post.value && post.value.status === 'ongoing' && canManage.value)
 
+/** 模块差异化状态文案：二手交易在售中 / 已售出 / 已过期 / 已下架 */
+const statusText = computed(() => {
+  if (post.value?.type === 'second_hand') {
+    return { ongoing: '在售中', claimed: '已售出', expired: '已过期', closed: '已下架' }
+  }
+  return { ongoing: '进行中', claimed: '已认领', expired: '已过期', closed: '已关闭' }
+})
+const claimActionText = computed(() => (post.value?.type === 'second_hand' ? '标记已售出' : '标记已认领'))
+const closeActionText = computed(() => (post.value?.type === 'second_hand' ? '下架该商品' : '关闭该信息'))
+
 onMounted(load)
 
 async function load() {
@@ -183,10 +193,9 @@ async function copyContact() {
 }
 
 function handleCommand(command) {
-  if (command === 'ongoing') changeStatus('ongoing', '进行中')
-  else if (command === 'claimed') changeStatus('claimed', '已认领')
-  else if (command === 'expired') changeStatus('expired', '已过期')
-  else if (command === 'closed') changeStatus('closed', '已关闭')
+  if (statusText.value[command]) {
+    changeStatus(command, statusText.value[command])
+  }
 }
 </script>
 
@@ -229,6 +238,20 @@ function handleCommand(command) {
           <span><el-icon><View /></el-icon> {{ post.view_count || 0 }} 次浏览</span>
           <span><el-icon><ChatDotRound /></el-icon> {{ post.comment_count || 0 }} 条评论</span>
           <span>发布于 {{ formatTime(post.created_at) }}</span>
+        </div>
+
+        <!-- 二手交易扩展字段 -->
+        <div v-if="post.type === 'second_hand'" class="detail-ext">
+          <span class="detail-ext__price">￥{{ post.ext?.price }}</span>
+          <el-tag v-if="post.ext?.condition" type="success" effect="plain">
+            {{ post.ext.condition }}
+          </el-tag>
+          <el-tag v-if="post.ext?.trade_type" type="info" effect="plain">
+            {{ post.ext.trade_type }}
+          </el-tag>
+          <span v-if="post.ext?.original_price" class="slp-text-sub">
+            原价 ￥{{ post.ext.original_price }}
+          </span>
         </div>
 
         <p v-if="post.content" class="detail-content">{{ post.content }}</p>
@@ -311,9 +334,9 @@ function handleCommand(command) {
               v-if="canClaim"
               type="success"
               :loading="submitting"
-              @click="changeStatus('claimed', '已认领')"
+              @click="changeStatus('claimed', statusText.claimed)"
             >
-              标记已认领
+              {{ claimActionText }}
             </el-button>
 
             <el-dropdown v-if="post.status !== 'closed'" @command="handleCommand">
@@ -322,10 +345,10 @@ function handleCommand(command) {
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="ongoing">标记为进行中</el-dropdown-item>
-                  <el-dropdown-item command="claimed">标记为已认领</el-dropdown-item>
-                  <el-dropdown-item command="expired">标记为已过期</el-dropdown-item>
-                  <el-dropdown-item command="closed" divided>关闭该信息</el-dropdown-item>
+                  <el-dropdown-item command="ongoing">标记为{{ statusText.ongoing }}</el-dropdown-item>
+                  <el-dropdown-item command="claimed">标记为{{ statusText.claimed }}</el-dropdown-item>
+                  <el-dropdown-item command="expired">标记为{{ statusText.expired }}</el-dropdown-item>
+                  <el-dropdown-item command="closed" divided>{{ closeActionText }}</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -373,5 +396,18 @@ function handleCommand(command) {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.detail-ext {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.detail-ext__price {
+  font-size: 24px;
+  font-weight: 700;
+  color: #f56c6c;
 }
 </style>

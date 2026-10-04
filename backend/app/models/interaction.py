@@ -33,7 +33,8 @@ class Comment(BaseModel):
                           comment='父评论ID（直接上级）')
     #: 顶级评论 ID；顶级评论自己存自己的 id（插入后再回填），便于一次查出整棵子树
     root_id = db.Column(db.Integer, nullable=True, index=True, comment='顶级评论ID（楼中楼）')
-    content = db.Column(db.Text, nullable=False, comment='评论内容')
+    content = db.Column(db.Text, nullable=False, default='',
+                        comment='评论内容（纯图片/语音评论存空字符串，避免 NULL）')
     #: 图片 / 视频 / 语音，JSON 数组，结构与 posts.media 完全一致
     media = db.Column(db.Text, nullable=True, comment='图片/视频/语音(JSON数组)')
     #: 被回复的用户（用于「回复 @某人」提示与通知）
@@ -98,7 +99,8 @@ class Message(BaseModel):
 
     sender_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True, comment='发送者')
     receiver_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True, comment='接收者')
-    content = db.Column(db.Text, nullable=True, comment='文本内容（发表情/语音时可空）')
+    content = db.Column(db.Text, nullable=False, default='',
+                        comment='文本内容（纯图片/语音时存空字符串，与数据库 NOT NULL 对齐）')
     #: 消息类型：text / image / voice / video；便于前端按类型渲染气泡
     msg_type = db.Column(db.String(16), nullable=False, default='text', index=True, comment='消息类型')
     #: 图片 / 语音 / 视频，JSON 数组，结构与 posts.media 一致
