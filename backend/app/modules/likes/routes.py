@@ -80,7 +80,19 @@ def post_like_state(post_id):
     if post is None or post.is_deleted:
         return error('帖子不存在或已删除', 4001)
     liked = PostLike.query.filter_by(user_id=user.id, post_id=post_id).first() is not None
-    return success({'liked': liked, 'like_count': post.like_count or 0})
+
+    # 拼单「我要拼」意向名单：复用本接口，不新增路由 / 表。
+    # 仅作者与管理员可见，避免普通用户遍历出参与名单。
+    users = []
+    if user.id == post.user_id or user.is_admin:
+        rows = (
+            PostLike.query.filter_by(post_id=post_id)
+            .order_by(PostLike.id.desc())
+            .limit(50)
+            .all()
+        )
+        users = [row.user.to_brief() for row in rows if row.user]
+    return success({'liked': liked, 'like_count': post.like_count or 0, 'users': users})
 
 
 # ---------------------------------------------------------------------------

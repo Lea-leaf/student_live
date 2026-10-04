@@ -33,37 +33,45 @@ const query = reactive({
 /** 模块：目前只有失物招领有完整业务，其他模块按启用状态显示 */
 const activeModule = computed(() => String(route.query.type || 'lost_found'))
 
-const SECOND_HAND_STATUS_LABELS = {
-  ongoing: '在售中',
-  claimed: '已售出',
-  expired: '已过期',
-  closed: '已下架'
-}
+const metaStatuses = ref([])
 
+/** 状态下拉优先走后端 /meta（按模块过滤 + 模块专属文案） */
 const statusOptions = computed(() => {
-  const list = appStore.enums.post_status || [
+  if (metaStatuses.value.length) return metaStatuses.value
+  return appStore.enums.post_status || [
     { value: 'ongoing', label: '进行中' },
     { value: 'claimed', label: '已认领' },
     { value: 'expired', label: '已过期' },
     { value: 'closed', label: '已关闭' }
   ]
-  if (activeModule.value !== 'second_hand') return list
-  return list.map((item) => ({
-    ...item,
-    label: SECOND_HAND_STATUS_LABELS[item.value] || item.label
-  }))
 })
 
-onMounted(() => {
+async function loadMeta() {
+  try {
+    const data = await lostFoundApi.meta({ type: activeModule.value })
+    metaStatuses.value = data.statuses || []
+    // 模块切换后，当前筛选值可能不属于新模块，自动清掉
+    if (query.status && !metaStatuses.value.some((item) => item.value === query.status)) {
+      query.status = ''
+    }
+  } catch (error) {
+    metaStatuses.value = []
+  }
+}
+
+onMounted(async () => {
   query.keyword = String(route.query.keyword || '')
   query.status = String(route.query.status || '')
   query.page = Number(route.query.page || 1)
+  await loadMeta()
   load()
 })
 
 // 路由参数变化时重新加载（模块切换）
-watch(() => route.query.type, () => {
+watch(() => route.query.type, async () => {
   query.page = 1
+  query.status = ''
+  await loadMeta()
   load()
 })
 

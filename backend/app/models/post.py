@@ -17,6 +17,8 @@ from ..utils.constants import (
     AUDIT_STATUSES,
     CAP_POST_AUDIT,
     MODULE_LOST_FOUND,
+    MODULE_DETAIL_VISIBLE_STATUSES,
+    MODULE_LIST_VISIBLE_STATUSES,
     MODULE_STATUS_LABELS,
     POST_DETAIL_VISIBLE_STATUSES,
     POST_LIST_VISIBLE_STATUSES,
@@ -152,13 +154,15 @@ class Post(BaseModel):
 
     @property
     def list_visible(self):
-        """列表可见：已关闭的帖子不进公开列表。"""
-        return self.is_public and self.status in POST_LIST_VISIBLE_STATUSES
+        """列表可见：默认沿用全局规则，拼单 / 跑腿 / 日常按模块覆盖。"""
+        allowed = MODULE_LIST_VISIBLE_STATUSES.get(self.type, POST_LIST_VISIBLE_STATUSES)
+        return self.is_public and self.status in allowed
 
     @property
     def detail_visible(self):
-        """详情可点：仅进行中的帖子可查看详情。"""
-        return self.is_public and self.status in POST_DETAIL_VISIBLE_STATUSES
+        """详情可点：默认仅进行中；拼单 / 跑腿 / 日常结束后仍可回看。"""
+        allowed = MODULE_DETAIL_VISIBLE_STATUSES.get(self.type, POST_DETAIL_VISIBLE_STATUSES)
+        return self.is_public and self.status in allowed
 
     def soft_delete(self, operator_id=None):
         """软删除，进入回收站。"""

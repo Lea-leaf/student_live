@@ -38,14 +38,17 @@ export const lostFoundApi = {
   /** 我的发布 */
   myPosts: (params) => request.get(API.lostFound.myPosts, { params }),
 
+  /** 拼单：修改目标人数 / 当前人数（仅单主，仅 group_buy） */
+  updateCount: (id, data) => request.patch(API.lostFound.count(id), data),
+
   /** 更新状态：{ status, reason } */
   updateStatus: (id, data) => request.post(API.lostFound.status(id), data),
 
   /** 标记已认领 */
   claim: (id) => request.post(API.lostFound.claim(id)),
 
-  /** 模块元信息（状态字典、字段要求） */
-  meta: () => request.get(API.lostFound.meta)
+  /** 模块元信息（状态字典、字段要求；?type= 切换模块） */
+  meta: (params) => request.get(API.lostFound.meta, { params })
 }
 
 export default lostFoundApi

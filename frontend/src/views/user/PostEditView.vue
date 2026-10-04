@@ -40,6 +40,8 @@ const submitting = ref(false)
 const uploading = ref(false)
 const uploadPercent = ref(0)
 const mediaList = ref([])
+// 日常模块默认隐藏联系方式；发布者勾选后才显示输入框
+const contactEnabled = ref(true)
 
 const isEdit = computed(() => !!route.params.id)
 const postId = computed(() => Number(route.params.id))
@@ -94,19 +96,24 @@ function resetExtForm(ext = null) {
 function onTypeChange() {
   resetExtForm()
   form.happened_at = ''
+  // 日常默认收起联系方式；只有发布者主动勾选才显示（避免本地记住的值把它顶开）
+  contactEnabled.value = activeForm.value.contactVisible !== false
   if (!isEdit.value) {
     localStorage.setItem(LAST_PUBLISH_TYPE_KEY, form.type)
   }
 }
 
-const rules = {
-  contact: [
-    { required: true, message: '联系方式必填（将公开展示）', trigger: 'blur' },
-    { min: 2, max: 64, message: '长度 2-64 个字符', trigger: 'blur' }
-  ],
+// 联系方式是否必填由模块配置决定（拼单 / 日常选填）
+const rules = computed(() => ({
+  contact: activeForm.value.contactRequired
+    ? [
+        { required: true, message: '联系方式必填（将公开展示）', trigger: 'blur' },
+        { min: 2, max: 64, message: '长度 2-64 个字符', trigger: 'blur' }
+      ]
+    : [{ max: 64, message: '长度不能超过 64 个字符', trigger: 'blur' }],
   title: [{ max: 60, message: '标题不超过 60 个字', trigger: 'blur' }],
   content: [{ max: 2000, message: '描述不超过 2000 个字', trigger: 'blur' }]
-}
+}))
 
 const auditEnabled = computed(() => {
   const value = appStore.config.post_audit_enabled
@@ -124,6 +131,7 @@ onMounted(async () => {
   form.type = resolveDefaultType()
   resetExtForm()
   form.contact = localStorage.getItem(LAST_CONTACT_KEY) || ''
+  contactEnabled.value = activeForm.value.contactVisible !== false
 })
 
 // appStore.modules 异步加载完成或后台模块变动时，确保当前选择仍然有效
@@ -132,6 +140,7 @@ watch(moduleOptions, (list) => {
   if (!list.some((item) => item.code === form.type)) {
     form.type = resolveDefaultType()
     resetExtForm()
+    contactEnabled.value = activeForm.value.contactVisible !== false
   }
 })
 
@@ -144,6 +153,9 @@ async function loadPost() {
     form.happened_at = data.happened_at || ''
     form.contact = data.contact || ''
     form.type = data.type || 'lost_found'
+    contactEnabled.value = activeForm.value.contactVisible === false
+      ? !!form.contact.trim()
+      : true
     resetExtForm(data.ext || {})
     mediaList.value = data.media || []
   } catch (error) {
@@ -236,13 +248,16 @@ async function onSubmit() {
 
   submitting.value = true
   try {
+    const submittedContact = (
+      activeForm.value.contactVisible === false && !contactEnabled.value
+    ) ? '' : form.contact
     const payload = {
       type: form.type,
       title: form.title,
       content: form.content,
       location: form.location,
       happened_at: form.happened_at || null,
-      contact: form.contact,
+      contact: submittedContact,
       media: mediaList.value,
       ext: buildExtPayload(form.type, extForm)
     }
@@ -255,7 +270,9 @@ async function onSubmit() {
     }
 
     const data = await lostFoundApi.create(payload)
-    localStorage.setItem(LAST_CONTACT_KEY, form.contact)
+    if (submittedContact) {
+      localStorage.setItem(LAST_CONTACT_KEY, submittedContact)
+    }
     localStorage.setItem(LAST_PUBLISH_TYPE_KEY, form.type)
     ElMessage.success(data.audit_status === 'approved' ? '发布成功' : '发布成功，等待管理员审核后公开')
     router.push({ name: 'my-posts' })
@@ -275,6 +292,7 @@ function onReset() {
   if (!isEdit.value) {
     form.type = resolveDefaultType()
   }
+  contactEnabled.value = activeForm.value.contactVisible !== false
   resetExtForm()
   mediaList.value = []
   formRef.value?.clearValidate()
@@ -343,7 +361,11 @@ function onReset() {
           />
         </el-form-item>
 
-        <el-form-item :label="activeForm.time.label" :required="activeForm.time.required">
+        <el-form-item
+          v-if="activeForm.time && !activeForm.time.hidden"
+          :label="activeForm.time.label"
+          :required="activeForm.time.required"
+        >
           <el-date-picker
             v-model="form.happened_at"
             type="datetime"
@@ -365,6 +387,14 @@ function onReset() {
             v-model="extForm[field.key]"
             v-bind="field.props || {}"
             :placeholder="field.placeholder"
+            style="width: 200px"
+          />
+          <el-date-picker
+            v-else-if="field.component === 'date'"
+            v-model="extForm[field.key]"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :placeholder="field.placeholder || '选择日期'"
             style="width: 200px"
           />
           <el-select
@@ -389,7 +419,17 @@ function onReset() {
           <span v-if="field.hint" class="slp-text-sub">{{ field.hint }}</span>
         </el-form-item>
 
-        <el-form-item label="联系方式（必填，公开可见）" prop="contact">
+        <template v-if="activeForm.contactVisible === false && !contactEnabled">
+          <el-form-item label="联系方式">
+            <el-checkbox v-model="contactEnabled">填写联系方式（选填）</el-checkbox>
+            <span class="slp-text-sub">日常可以不填；勾选后再填写并公开展示。</span>
+          </el-form-item>
+        </template>
+        <el-form-item
+          v-else
+          :label="activeForm.contactRequired ? '联系方式（必填，公开可见）' : '联系方式（选填，公开可见）'"
+          prop="contact"
+        >
           <el-input v-model="form.contact" maxlength="64" placeholder="例如：微信 xiaoming2021 / QQ 12345678" />
           <span class="slp-text-sub">该联系方式会公开展示，建议只留常用社交账号，请勿填写身份证等敏感信息。</span>
         </el-form-item>

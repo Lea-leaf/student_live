@@ -179,9 +179,14 @@ def validate_password(value):
     return value
 
 
-def validate_contact(value):
-    """联系方式：必填且公开可见，做宽松格式校验。"""
-    value = clean_text(value, 64, '联系方式', required=True)
+def validate_contact(value, required=True):
+    """联系方式：默认必填且公开可见，做宽松格式校验。
+
+    required=False 时允许空值：返回空字符串 ''，满足 posts.contact 的 NOT NULL 约束。
+    """
+    value = clean_text(value, 64, '联系方式', required=required)
+    if not value:
+        return ''
     if not RE_CONTACT.match(value):
         raise ValidationError('联系方式格式不正确（支持手机号 / QQ / 微信 / 邮箱）')
     return value

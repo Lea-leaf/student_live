@@ -7,7 +7,7 @@
 """
 
 from ..extensions import db
-from ..utils.constants import MODULE_LOST_FOUND
+from ..utils.constants import MODULE_DAILY, MODULE_LOST_FOUND
 from .base import BaseModel
 
 
@@ -70,7 +70,7 @@ def default_modules():
             'code': 'group_buy',
             'name': '拼单',
             'icon': 'ShoppingBag',
-            'description': '拼单凑单（v2.x 规划）',
+            'description': '拼单凑单：目标人数 / 当前人数 / 开始日期（v1.5 已实现）',
             'sort_order': 30,
             'enabled': False,
             'is_system': False,
@@ -79,8 +79,17 @@ def default_modules():
             'code': 'errand',
             'name': '跑腿',
             'icon': 'Bicycle',
-            'description': '代取快递 / 代买（v2.x 规划）',
+            'description': '代取快递 / 代买：期望时间 + 联系方式（v1.5 已实现）',
             'sort_order': 40,
+            'enabled': False,
+            'is_system': False,
+        },
+        {
+            'code': MODULE_DAILY,
+            'name': '日常',
+            'icon': 'ChatDotRound',
+            'description': '校园日常分享与闲聊（v1.5 已实现）',
+            'sort_order': 45,
             'enabled': False,
             'is_system': False,
         },

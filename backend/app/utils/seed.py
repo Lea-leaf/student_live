@@ -35,6 +35,9 @@ from ..utils.constants import (
     AUDIT_APPROVED,
     AUDIT_PENDING,
     AUDIT_REJECTED,
+    MODULE_DAILY,
+    MODULE_ERRAND,
+    MODULE_GROUP_BUY,
     MODULE_LOST_FOUND,
     MODULE_SECOND_HAND,
     POST_CLAIMED,
@@ -229,6 +232,57 @@ def run_seed(reset=False):
             view_count=rnd.randint(5, 120),
             created_at=now - timedelta(days=rnd.randint(0, 6), hours=rnd.randint(0, 20)),
         )
+        db.session.add(post)
+        posts.append(post)
+
+    # ---- v1.5 三模块演示数据：ext_json / 通用字段各验证一遍 ----
+    group_buy_post = Post(
+        type=MODULE_GROUP_BUY,
+        user_id=students[2].id,
+        title='拼奶茶（一点点，满 5 杯起送）',
+        content='6 号宿舍楼下自取，按人头分摊，口味群里说。',
+        ext_json=json.dumps({'target_count': 5, 'current_count': 2,
+                             'start_date': (now + timedelta(days=2)).strftime('%Y-%m-%d')},
+                            ensure_ascii=False),
+        location='6 号宿舍楼下',
+        contact='微信 groupbuy_demo',
+        status=POST_ONGOING,
+        audit_status=AUDIT_APPROVED,
+        audited_by=admin.id,
+        audited_at=now - timedelta(hours=5),
+        view_count=rnd.randint(20, 80),
+        created_at=now - timedelta(hours=6),
+    )
+    errand_post = Post(
+        type=MODULE_ERRAND,
+        user_id=students[4].id,
+        title='帮取一个快递（菜鸟驿站  6 号楼）',
+        content='小件，不重；送到 6 号楼 302 即可，费用可以商量。',
+        location='菜鸟驿站',
+        contact='微信 errand_demo',
+        happened_at=now + timedelta(hours=6),
+        status=POST_ONGOING,
+        audit_status=AUDIT_APPROVED,
+        audited_by=admin.id,
+        audited_at=now - timedelta(hours=3),
+        view_count=rnd.randint(10, 60),
+        created_at=now - timedelta(hours=4),
+    )
+    daily_post = Post(
+        type=MODULE_DAILY,
+        user_id=students[5].id,
+        title='食堂新出的麻辣香锅挺好吃',
+        content='就在二食堂二楼，微辣刚好，推荐加宽粉。',
+        location='二食堂二楼',
+        contact='',
+        status=POST_ONGOING,
+        audit_status=AUDIT_APPROVED,
+        audited_by=admin.id,
+        audited_at=now - timedelta(hours=2),
+        view_count=rnd.randint(5, 40),
+        created_at=now - timedelta(hours=2),
+    )
+    for post in (group_buy_post, errand_post, daily_post):
         db.session.add(post)
         posts.append(post)
 

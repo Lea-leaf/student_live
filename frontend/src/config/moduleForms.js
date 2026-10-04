@@ -29,6 +29,8 @@ const TRADE_TYPE_OPTIONS = [
 
 /** 通用字段默认文案（失物招领 / 未登记模块共用） */
 const COMMON_FIELDS = {
+  contactRequired: true,
+  contactVisible: true,
   formHint: '除联系方式外，其余字段都可以留空。',
   titleLabel: '标题（选填）',
   titlePlaceholder: '例如：在图书馆丢了一把黑色雨伞',
@@ -56,6 +58,7 @@ export const MODULE_FORMS = {
   },
 
   second_hand: {
+    contactRequired: true,
     formHint: '二手交易需填写价格、交易时间与联系方式；商品名称和描述建议写清楚。',
     titleLabel: '商品名称',
     titlePlaceholder: '例如：九成新山地自行车',
@@ -102,6 +105,75 @@ export const MODULE_FORMS = {
     ]
   },
 
+  group_buy: {
+    contactRequired: false,
+    formHint: '拼单需填写目标人数、当前人数与开始日期；人数变化可随时在「我的发布」里修改。',
+    titleLabel: '拼单名称',
+    titlePlaceholder: '例如：拼奶茶（一点点，满 5 杯起送）',
+    contentLabel: '拼单说明',
+    contentPlaceholder: '口味要求、取货方式、分摊方式等',
+    locationLabel: '取货地点（选填）',
+    locationPlaceholder: '例如：6 号宿舍楼下',
+    mediaLabel: '图片 / 视频（选填）',
+    // 开始日期走专属字段 start_date，不占用通用 happened_at
+    time: { hidden: true },
+    extFields: [
+      {
+        key: 'target_count',
+        label: '目标人数（必填）',
+        component: 'number',
+        required: true,
+        props: { min: 1, max: 999, precision: 0, step: 1 },
+        placeholder: '请输入目标人数'
+      },
+      {
+        key: 'current_count',
+        label: '当前人数（必填）',
+        component: 'number',
+        required: true,
+        default: 0,
+        props: { min: 0, max: 999, precision: 0, step: 1 },
+        placeholder: '请输入当前人数'
+      },
+      {
+        key: 'start_date',
+        label: '开始日期（必填）',
+        component: 'date',
+        required: true,
+        placeholder: '选择开始日期'
+      }
+    ]
+  },
+
+  errand: {
+    contactRequired: true,
+    formHint: '跑腿请填写期望时间与联系方式，方便同学联系你。',
+    titleLabel: '跑腿需求',
+    titlePlaceholder: '例如：帮取一个快递（菜鸟驿站  6 号楼）',
+    contentLabel: '详细说明',
+    contentPlaceholder: '物品大小、重量、注意事项等',
+    locationLabel: '取件地点',
+    locationPlaceholder: '例如：菜鸟驿站',
+    mediaLabel: '图片（选填）',
+    time: { label: '期望时间（必填）', placeholder: '期望送达的时间', required: true },
+    extFields: []
+  },
+
+  daily: {
+    contactRequired: false,
+    contactVisible: false,   // 默认不显示联系方式；发布者勾选后才填写
+    formHint: '日常分享，随便写点什么都可以；联系方式可不填。',
+    titleLabel: '标题（选填）',
+    titlePlaceholder: '例如：食堂新出的麻辣香锅挺好吃',
+    contentLabel: '内容（选填）',
+    contentPlaceholder: '想说的话',
+    locationLabel: '地点（选填）',
+    locationPlaceholder: '例如：二食堂二楼',
+    mediaLabel: '图片 / 视频（选填）',
+    time: { label: '时间（选填）', placeholder: '选择时间', required: false },
+    extFields: []
+  },
+
   default: { ...COMMON_FIELDS }
 }
 
@@ -117,6 +189,7 @@ export function createEmptyExt(moduleCode) {
     if (field.component === 'number') {
       result[field.key] = field.default !== undefined ? field.default : null
     } else {
+      // text / select / date 空值统一用空字符串
       result[field.key] = field.default !== undefined ? field.default : ''
     }
   }
@@ -163,6 +236,11 @@ export function validateExtForm(moduleCode, values) {
       const min = field.props?.min
       if (min !== undefined && num < min) {
         return `${field.label}不能小于 ${min}`
+      }
+    }
+    if (field.component === 'date' && value) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value))) {
+        return `${field.label}格式应为 YYYY-MM-DD`
       }
     }
   }

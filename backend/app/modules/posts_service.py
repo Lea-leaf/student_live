@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 from datetime import datetime, timedelta
 
 from ..extensions import db
@@ -23,6 +24,8 @@ from ..utils.constants import (
     AUDIT_APPROVED,
     AUDIT_PENDING,
     AUDIT_REJECTED,
+    MODULE_DAILY,
+    MODULE_GROUP_BUY,
     MODULE_SECOND_HAND,
     POST_CLAIMED,
     POST_CLOSED,
@@ -389,7 +392,49 @@ def validate_module_ext(module_code, value):
                 ext['original_price'] = round(float(original), 2)
             except (TypeError, ValueError):
                 raise ValidationError('二手交易原价必须是数字') from None
+
+    if module_code == MODULE_GROUP_BUY:
+        # 目标人数：必填整数 1-999
+        target = ext.get('target_count')
+        if target in (None, ''):
+            raise ValidationError('拼单必须填写目标人数 target_count')
+        try:
+            target = int(target)
+        except (TypeError, ValueError):
+            raise ValidationError('目标人数必须是整数') from None
+        if not (1 <= target <= 999):
+            raise ValidationError('目标人数需在 1-999 之间')
+        ext['target_count'] = target
+
+        # 当前人数：必填整数 0-999（允许大于目标人数，由单主自行判断）
+        current = ext.get('current_count')
+        if current in (None, ''):
+            raise ValidationError('拼单必须填写当前人数 current_count')
+        try:
+            current = int(current)
+        except (TypeError, ValueError):
+            raise ValidationError('当前人数必须是整数') from None
+        if not (0 <= current <= 999):
+            raise ValidationError('当前人数需在 0-999 之间')
+        ext['current_count'] = current
+
+        # 开始日期：必填，YYYY-MM-DD
+        start = ext.get('start_date')
+        if start in (None, ''):
+            raise ValidationError('拼单必须填写开始日期 start_date')
+        if not isinstance(start, str) or not re.match(r'^\d{4}-\d{2}-\d{2}$', start):
+            raise ValidationError('开始日期格式应为 YYYY-MM-DD')
+        try:
+            datetime.strptime(start, '%Y-%m-%d')
+        except ValueError:
+            raise ValidationError('开始日期不是有效日期') from None
+        ext['start_date'] = start
     return ext
+
+
+def contact_required(module_code):
+    """拼单 / 日常的联系方式选填，其余模块必填。"""
+    return module_code not in (MODULE_GROUP_BUY, MODULE_DAILY)
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +471,7 @@ def build_post(post_type, user, data, audit_enabled=True):
         content=clean_text(data.get('content'), 5000, '描述'),
         location=clean_text(data.get('location'), 128, '地点'),
         happened_at=parse_datetime(data.get('happened_at'), '发生时间'),
-        contact=validate_contact(data.get('contact')),
+        contact=validate_contact(data.get('contact'), required=contact_required(post_type)),
         status=POST_ONGOING,
     )
     # 只有**真正的管理员**发帖默认直接通过。

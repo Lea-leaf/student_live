@@ -28,6 +28,7 @@ const loading = ref(true)
 const post = ref(null)
 const favorited = ref(false)
 const liked = ref(false)
+const intentUsers = ref([])
 const loadError = ref('')
 const submitting = ref(false)
 const liking = ref(false)
@@ -51,17 +52,80 @@ const canManage = computed(() => {
   return post.value.user_id === userStore.user.id || userStore.isTrueAdmin
 })
 
-const canClaim = computed(() => post.value && post.value.status === 'ongoing' && canManage.value)
+const canClaim = computed(() => (
+  post.value
+  && post.value.status === 'ongoing'
+  && canManage.value
+  && allowedStatuses.value.includes('claimed')
+))
 
-/** 模块差异化状态文案：二手交易在售中 / 已售出 / 已过期 / 已下架 */
-const statusText = computed(() => {
-  if (post.value?.type === 'second_hand') {
-    return { ongoing: '在售中', claimed: '已售出', expired: '已过期', closed: '已下架' }
+/** 模块差异化状态文案（与后端 MODULE_STATUS_LABELS 保持一致） */
+const MODULE_STATUS_TEXT = {
+  lost_found: { ongoing: '进行中', claimed: '已认领', expired: '已过期', closed: '已关闭' },
+  second_hand: { ongoing: '在售中', claimed: '已售出', expired: '已过期', closed: '已下架' },
+  group_buy: { ongoing: '招募中', claimed: '已结束', expired: '已过期', closed: '已取消' },
+  errand: { ongoing: '进行中', claimed: '已完成', expired: '已过期', closed: '已取消' },
+  daily: { ongoing: '正常', claimed: '已关闭', expired: '已过期', closed: '已关闭' }
+}
+
+/** 每模块允许的状态子集（与后端 MODULE_ALLOWED_STATUSES 对齐） */
+const MODULE_ALLOWED_STATUSES = {
+  lost_found: ['ongoing', 'claimed', 'expired', 'closed'],
+  second_hand: ['ongoing', 'claimed', 'expired', 'closed'],
+  group_buy: ['ongoing', 'claimed', 'closed'],
+  errand: ['ongoing', 'claimed', 'expired', 'closed'],
+  daily: ['ongoing', 'closed']
+}
+
+const statusText = computed(() => (
+  MODULE_STATUS_TEXT[post.value?.type] || MODULE_STATUS_TEXT.lost_found
+))
+const allowedStatuses = computed(() => (
+  MODULE_ALLOWED_STATUSES[post.value?.type] || MODULE_ALLOWED_STATUSES.lost_found
+))
+const statusCommands = computed(() => (
+  allowedStatuses.value
+    .filter((status) => status !== post.value?.status)
+    .map((status) => ({ value: status, label: statusText.value[status] }))
+))
+const claimActionText = computed(() => {
+  const map = {
+    second_hand: '标记已售出',
+    group_buy: '标记已结束',
+    errand: '标记已完成',
+    lost_found: '标记已认领'
   }
-  return { ongoing: '进行中', claimed: '已认领', expired: '已过期', closed: '已关闭' }
+  return map[post.value?.type] || '标记已认领'
 })
-const claimActionText = computed(() => (post.value?.type === 'second_hand' ? '标记已售出' : '标记已认领'))
-const closeActionText = computed(() => (post.value?.type === 'second_hand' ? '下架该商品' : '关闭该信息'))
+const closeActionText = computed(() => {
+  const map = {
+    second_hand: '下架该商品',
+    group_buy: '取消拼单',
+    errand: '取消跑腿',
+    daily: '关闭日常',
+    lost_found: '关闭该信息'
+  }
+  return map[post.value?.type] || '关闭'
+})
+
+/** 拼单扩展信息 + 进度（永远封顶 100%，超出只用文案表达） */
+const isGroupBuy = computed(() => post.value?.type === 'group_buy')
+const targetCount = computed(() => Number(post.value?.ext?.target_count || 0))
+const currentCount = computed(() => Number(post.value?.ext?.current_count || 0))
+const progressPercent = computed(() => {
+  if (!targetCount.value || targetCount.value <= 0) return 0
+  return Math.min(Math.max(Math.round((currentCount.value / targetCount.value) * 100), 0), 100)
+})
+const progressText = computed(() => {
+  if (!isGroupBuy.value) return ''
+  if (currentCount.value < targetCount.value) {
+    return `还差 ${targetCount.value - currentCount.value} 人`
+  }
+  if (currentCount.value === targetCount.value) {
+    return '人数已满'
+  }
+  return `人数已满（超出 ${currentCount.value - targetCount.value} 人）`
+})
 
 onMounted(load)
 
@@ -73,6 +137,9 @@ async function load() {
     // 详情接口已带 liked / favorited（v1.2 起），省掉两个单独的 check 请求
     favorited.value = !!post.value.favorited
     liked.value = !!post.value.liked
+    if (post.value.type === 'group_buy') {
+      await loadIntentUsers()
+    }
     if (userStore.isLogin && typeof post.value.liked === 'undefined') {
       try {
         const check = await favoriteApi.check(postId.value)
@@ -124,9 +191,24 @@ async function toggleFavorite() {
   }
 }
 
+/** 拼单作者 / 管理员可见「我要拼」意向名单（复用 GET /likes/posts/{id}） */
+async function loadIntentUsers() {
+  if (!userStore.isLogin || !post.value) return
+  if (post.value.user_id !== userStore.user?.id && !userStore.isTrueAdmin) {
+    intentUsers.value = []
+    return
+  }
+  try {
+    const state = await likeApi.checkPost(postId.value)
+    intentUsers.value = state.users || []
+  } catch (error) {
+    intentUsers.value = []
+  }
+}
+
 async function toggleLike() {
   if (!userStore.isLogin) {
-    ElMessage.warning('登录后才能点赞')
+    ElMessage.warning(isGroupBuy.value ? '登录后才能表达拼单意向' : '登录后才能点赞')
     return
   }
   liking.value = true
@@ -134,6 +216,10 @@ async function toggleLike() {
     const data = await likeApi.togglePost(postId.value)
     liked.value = data.liked
     if (post.value) post.value.like_count = data.like_count
+    if (isGroupBuy.value) {
+      ElMessage.success(data.liked ? '已表达拼单意向' : '已取消拼单意向')
+      loadIntentUsers()
+    }
   } catch (error) {
     // 拦截器已提示
   } finally {
@@ -260,6 +346,29 @@ function handleCommand(command) {
           </span>
         </div>
 
+        <!-- 拼单扩展字段 + 进度 -->
+        <div v-if="isGroupBuy" class="detail-group">
+          <div class="detail-group__row">
+            <span>目标人数：<strong>{{ targetCount }}</strong> 人</span>
+            <span>当前人数：<strong>{{ currentCount }}</strong> 人</span>
+            <span>开始日期：{{ post.ext?.start_date || '-' }}</span>
+          </div>
+          <el-progress
+            class="detail-group__progress"
+            :percentage="progressPercent"
+            :stroke-width="10"
+            :show-text="false"
+          />
+          <div class="slp-text-sub">
+            {{ progressText }}
+             意向 {{ post.like_count || 0 }} 人（点赞即表达意向，一人一次）
+          </div>
+          <div v-if="canManage && intentUsers.length" class="slp-text-sub">
+            意向名单：{{ intentUsers.slice(0, 10).map((user) => user.display_name).join('、') }}
+            <template v-if="intentUsers.length > 10"> 等 {{ intentUsers.length }} 人</template>
+          </div>
+        </div>
+
         <p v-if="post.content" class="detail-content">{{ post.content }}</p>
         <p v-else class="slp-text-sub">发布者未填写描述</p>
 
@@ -272,8 +381,8 @@ function handleCommand(command) {
         </div>
       </div>
 
-      <!-- 联系方式 -->
-      <div class="slp-card">
+      <!-- 联系方式：为空时不显示，避免日常 / 拼单出现空白占位卡片 -->
+      <div v-if="post.contact" class="slp-card">
         <h3 class="slp-mb-8">联系方式</h3>
         <div class="detail-contact">
           {{ post.contact }}
@@ -328,7 +437,12 @@ function handleCommand(command) {
             :loading="liking"
             @click="toggleLike"
           >
-            {{ liked ? '已点赞' : '点赞' }} {{ post.like_count || 0 }}
+            <template v-if="isGroupBuy">
+              {{ liked ? '取消意向' : '我要拼' }} {{ post.like_count || 0 }}
+            </template>
+            <template v-else>
+              {{ liked ? '已点赞' : '点赞' }} {{ post.like_count || 0 }}
+            </template>
           </el-button>
           <el-button :icon="favorited ? StarFilled : Star" @click="toggleFavorite">
             {{ favorited ? '已收藏' : '收藏' }} {{ post.favorite_count || 0 }}
@@ -351,10 +465,14 @@ function handleCommand(command) {
               </el-button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item command="ongoing">标记为{{ statusText.ongoing }}</el-dropdown-item>
-                  <el-dropdown-item command="claimed">标记为{{ statusText.claimed }}</el-dropdown-item>
-                  <el-dropdown-item command="expired">标记为{{ statusText.expired }}</el-dropdown-item>
-                  <el-dropdown-item command="closed" divided>{{ closeActionText }}</el-dropdown-item>
+                  <el-dropdown-item
+                    v-for="option in statusCommands"
+                    :key="option.value"
+                    :command="option.value"
+                    :divided="option.value === 'closed'"
+                  >
+                    标记为{{ option.label }}
+                  </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -415,5 +533,24 @@ function handleCommand(command) {
   font-size: 24px;
   font-weight: 700;
   color: #f56c6c;
+}
+
+.detail-group {
+  padding: 12px;
+  margin-bottom: 12px;
+  background: #f7f8fa;
+  border-radius: 8px;
+}
+
+.detail-group__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.detail-group__progress {
+  margin-bottom: 6px;
 }
 </style>

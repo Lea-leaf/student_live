@@ -106,7 +106,7 @@
 
 ---
 
-## 四、帖子模块 `/api/v1/lost_found`（默认失物招领，也支持 `type=second_hand`）
+## 四、帖子模块 `/api/v1/lost_found`（统一帖子接口，支持多模块 `type`）
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
@@ -118,7 +118,8 @@
 | DELETE | `/lost_found/posts/{id}` | 作者/管理员 | 删除（软删除 → 回收站） |
 | GET | `/lost_found/my/posts` | 登录 | 我的发布：默认返回全部模块，可用 `?type=` 过滤；含全部状态 |
 | POST | `/lost_found/posts/{id}/status` | 作者/管理员 | 状态流转 |
-| POST | `/lost_found/posts/{id}/claim` | 作者/管理员 | 标记已认领（等价 `status=claimed`） |
+| POST | `/lost_found/posts/{id}/claim` | 作者/管理员 | 标记已认领（等价 `status=claimed`，按模块校验是否允许） |
+| PATCH | `/lost_found/posts/{id}/count` | 作者/管理员 | 修改拼单人数：`{current_count?, target_count?}`；**仅对 group_buy 生效**，其它模块返回 1001 |
 | GET | `/lost_found/meta?type=second_hand` | 游客 | 模块元信息（字段要求、状态字典、是否需审核；二手交易会额外返回价格等 ext 字段） |
 
 ¹ 游客可浏览列表由系统配置 `guest_can_list` 控制（默认开）。
@@ -130,11 +131,11 @@
 |---|---|
 | `page` / `size` | 分页 |
 | `keyword` | 标题 / 描述 / 地点模糊搜索 |
-| `status` | `ongoing` / `claimed` / `expired` / `closed` |
+| `status` | `ongoing` / `claimed` / `expired` / `closed`（各模块允许的状态子集见 `/meta`） |
 | `mine=1` | 只看我的发布（需登录，含待审核与已关闭） |
 | `all=1` | 管理员查看全部（含待审核） |
 | `sort` | `latest`（默认）/ `hot` / `oldest`；`hot` = 浏览*1 + 评论*3 + 点赞*2 + 收藏*2，再按 24 小时时间衰减 |
-| `type` | 模块 code，默认 `lost_found`；已实现 `second_hand`（二手交易），必须是启用中的模块 |
+| `type` | 模块 code，默认 `lost_found`；已实现 `second_hand` / `group_buy` / `errand` / `daily`，必须是启用中的模块 |
 
 **发布请求体（JSON 方式）**
 
@@ -149,12 +150,27 @@
 }
 ```
 
+拼单请求示例：
+
+```json
+{
+  "type": "group_buy",
+  "title": "拼奶茶（满 5 杯起送）",
+  "content": "取货方式：6 号宿舍楼下自取",
+  "happened_at": null,
+  "ext": { "target_count": 5, "current_count": 2, "start_date": "2026-12-01" }
+}
+```
+
+跑腿 / 日常无专属 ext 字段；跑腿的期望时间用 `happened_at`（必填），日常联系方式选填，且发布页默认隐藏联系方式，勾选后才填写。
+
 | 字段 | 必填 | 说明 |
 |---|---|---|
-| `contact` | **是** | 联系方式，公开可见 |
-| `type` | 否 | 模块 code，默认 `lost_found`；`second_hand` 表示二手交易 |
-| `ext` | 视模块 | 模块扩展 JSON；二手交易必填 `price`，可选 `original_price` / `condition` / `trade_type` |
-| `title` / `content` / `location` / `happened_at` / `media` | 否 | 选填 |
+| `contact` | 视模块 | 联系方式，公开可见；`lost_found` / `second_hand` / `errand` 必填，`group_buy` / `daily` 选填（空值存 `''`） |
+| `type` | 否 | 模块 code，默认 `lost_found`；已实现 `second_hand` / `group_buy` / `errand` / `daily` |
+| `ext` | 视模块 | 模块扩展 JSON；二手交易必填 `price`；拼单必填 `target_count` / `current_count` / `start_date` |
+| `title` / `content` / `location` / `media` | 否 | 选填 |
+| `happened_at` | 视模块 | 二手交易（交易时间）/ 跑腿（期望时间）必填；其它模块选填 |
 
 > `ext` 必须是 JSON 对象、最大 4096 字节；二手交易缺 `price` 或价格非法会返回 `1001`。
 > 二手交易列表 / 详情 / 卡片都会返回 `ext`，前端按 `type` 渲染价格、成色与交易方式。
@@ -179,9 +195,15 @@
 | 已过期 | ✅ | ❌（作者与管理员除外） |
 | 已关闭 | ❌ | ❌（作者与管理员除外） |
 
-> **模块差异（second_hand）**：状态值仍是 `ongoing / claimed / expired / closed`，
-> 但显示文案分别为 `在售中 / 已售出 / 已过期 / 已下架`；
-> `happened_at` 是必填字段（交易时间）；发布页会在前端提供模块选择器。
+> **模块状态差异**：状态值仍为 `ongoing / claimed / expired / closed`，显示文案按模块：
+> - `second_hand`：在售中 / 已售出 / 已过期 / 已下架
+> - `group_buy`：招募中 / 已结束 / 已取消（允许状态：ongoing / claimed / closed）
+> - `errand`：进行中 / 已完成 / 已取消 / 已过期
+> - `daily`：正常 / 已关闭（允许状态：ongoing / closed）
+> - `lost_found`：保留原文案
+>
+> 拼单、跑腿、日常在流程结束后仍可查看详情；具体状态子集与字段要求以
+> `GET /lost_found/meta?type=xxx` 返回为准。
 
 > **前端统一发布入口**：所有发布按钮都跳 `/publish`，类型由页面内「选择发布类型」决定，
 > 不通过 URL 的 `?type=` 传参；模块字段配置在前端 `src/config/moduleForms.js`，
@@ -271,7 +293,7 @@ POST 请求体：
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
 | POST | `/likes/posts/{id}` | 登录 | 帖子点赞 / 取消（幂等切换），返回 `{liked, like_count}` |
-| GET | `/likes/posts/{id}` | 登录 | 查询当前用户是否已点赞该帖子 |
+| GET | `/likes/posts/{id}` | 登录 | 查询当前用户是否已点赞该帖子；**作者 / 管理员**额外返回 `users`（拼单「我要拼」意向名单） |
 | POST | `/likes/comments/{id}` | 登录 | 评论点赞 / 取消，返回 `{liked, like_count}` |
 | GET | `/likes/comments/{id}` | 登录 | 查询当前用户是否已点赞该评论 |
 

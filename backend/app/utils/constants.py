@@ -223,12 +223,14 @@ MODULE_LOST_FOUND = 'lost_found'
 MODULE_SECOND_HAND = 'second_hand'
 MODULE_GROUP_BUY = 'group_buy'
 MODULE_ERRAND = 'errand'
+MODULE_DAILY = 'daily'
 MODULE_OTHER = 'other'
 
 #: 兜底模块：管理员可自由新增模块，未登记的自定义 type 也能工作
 DEFAULT_MODULE_CODE = MODULE_LOST_FOUND
 
-#: 模块差异化状态文案：数据库状态值不变，只在对应模块下换显示标签
+#: 模块差异化状态文案：数据库状态值不变，只在对应模块下换显示标签。
+#: 每个模块的字典都要覆盖该模块可能出现的全部状态，避免漏状态时显示英文原值。
 MODULE_STATUS_LABELS = {
     MODULE_SECOND_HAND: {
         POST_ONGOING: '在售中',
@@ -236,6 +238,50 @@ MODULE_STATUS_LABELS = {
         POST_EXPIRED: '已过期',
         POST_CLOSED: '已下架',
     },
+    MODULE_GROUP_BUY: {
+        POST_ONGOING: '招募中',
+        POST_CLAIMED: '已结束',
+        POST_CLOSED: '已取消',
+        POST_EXPIRED: '已过期',     # 保留兜底（该模块不会主动用到）
+    },
+    MODULE_ERRAND: {
+        POST_ONGOING: '进行中',
+        POST_CLAIMED: '已完成',
+        POST_CLOSED: '已取消',
+        POST_EXPIRED: '已过期',
+    },
+    MODULE_DAILY: {
+        POST_ONGOING: '正常',
+        POST_CLOSED: '已关闭',
+        POST_CLAIMED: '已关闭',     # 日常不使用该状态，兜底避免出现英文
+        POST_EXPIRED: '已过期',
+    },
+}
+
+#: 每模块允许的业务状态子集（用于表单下拉与筛选器）。
+#: 未登记的模块  回落到全局 POST_STATUSES（保持向后兼容）。
+MODULE_ALLOWED_STATUSES = {
+    MODULE_GROUP_BUY: (POST_ONGOING, POST_CLAIMED, POST_CLOSED),
+    MODULE_ERRAND: (POST_ONGOING, POST_CLAIMED, POST_CLOSED, POST_EXPIRED),
+    MODULE_DAILY: (POST_ONGOING, POST_CLOSED),
+    MODULE_LOST_FOUND: (POST_ONGOING, POST_CLAIMED, POST_CLOSED, POST_EXPIRED),
+}
+
+#: 按模块覆盖「详情可查看的状态」。
+#: 未列出的模块沿用上面的全局默认；这里列出的模块允许这些状态看详情。
+#: 说明：失物招领的设计是"已认领/已过期/已关闭就不再展示详情"，
+#: 但拼单/跑腿/日常是"流程结束后仍需要回看信息"，因此覆盖为全部状态可见。
+MODULE_DETAIL_VISIBLE_STATUSES = {
+    MODULE_GROUP_BUY: POST_STATUSES,     # 全部状态可看详情
+    MODULE_ERRAND: POST_STATUSES,
+    MODULE_DAILY: POST_STATUSES,
+}
+
+#: 按模块覆盖「列表可见的状态」（拼单"已取消"不进公开列表，与'已关闭'一致）
+MODULE_LIST_VISIBLE_STATUSES = {
+    MODULE_GROUP_BUY: (POST_ONGOING, POST_CLAIMED),
+    MODULE_ERRAND: POST_STATUSES,
+    MODULE_DAILY: (POST_ONGOING, POST_CLOSED),
 }
 
 # ---------------------------------------------------------------------------

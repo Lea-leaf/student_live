@@ -16,6 +16,8 @@
 由 posts_service 与对应模块提供，本文件只做失物招领特有逻辑。
 """
 
+import json
+
 from flask import Blueprint, request
 
 from ...extensions import db
@@ -23,7 +25,8 @@ from ...models import Module, Post
 from ...models.base import paginate
 from ...utils.auth import optional_token, token_required
 from ...utils.config_service import get_config, get_config_int
-from ...utils.constants import (MODULE_LOST_FOUND, MODULE_SECOND_HAND, MODULE_STATUS_LABELS,
+from ...utils.constants import (MODULE_ALLOWED_STATUSES, MODULE_ERRAND, MODULE_GROUP_BUY,
+                                  MODULE_LOST_FOUND, MODULE_SECOND_HAND, MODULE_STATUS_LABELS,
                                   POST_CLAIMED, POST_STATUSES)
 from ...utils.helpers import current_page_args, guest_can_detail, guest_can_list, keyword_arg, post_audit_enabled
 from ...utils.hot_score import hot_score
@@ -55,11 +58,12 @@ def _extract_module_code(data, default=MODULE):
     return code
 
 
-def _require_second_hand_time(module_code, data):
-    """二手交易必须选择交易时间（happened_at）。"""
-    if module_code == MODULE_SECOND_HAND:
+def _require_module_time(module_code, data):
+    """需要 happened_at 的模块：二手交易（交易时间）、跑腿（期望时间）。"""
+    if module_code in (MODULE_SECOND_HAND, MODULE_ERRAND):
         if not str(data.get('happened_at') or '').strip():
-            raise ValidationError('二手交易必须选择交易时间', 1001)
+            label = '交易时间' if module_code == MODULE_SECOND_HAND else '期望时间'
+            raise ValidationError(f'{label}为必填项', 1001)
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +242,9 @@ def create_post():
             media = data.get('media') or []
 
         module_code = _extract_module_code(data)
-        _require_second_hand_time(module_code, data)
+        _require_module_time(module_code, data)
         post = svc.build_post(module_code, user, data, audit_enabled=post_audit_enabled())
-        svc.save_post(post, media=media, ext=data.get('ext'))
+        svc.save_post(post, media=media, ext=data.get('ext') or {})
         svc.attach_media(post, media)
 
         write_operation_log('create', module=post.type, target_type='post', target_id=post.id,
@@ -294,15 +298,17 @@ def update_post(post_id):
         if 'happened_at' in payload:
             post.happened_at = parse_datetime(payload.get('happened_at'), '发生时间')
         if 'contact' in payload:
-            post.contact = validate_contact(payload.get('contact'))
+            post.contact = validate_contact(payload.get('contact'),
+                                            required=svc.contact_required(post.type))
         if 'media' in payload:
             post.media = None
             svc.save_post(post, media=payload.get('media') or [], commit=False)
         if 'ext' in payload:
             svc.save_post(post, ext=payload.get('ext') or {}, commit=False)
 
-        if post.type == MODULE_SECOND_HAND and not post.happened_at:
-            raise ValidationError('二手交易必须选择交易时间', 1001)
+        if post.type in (MODULE_SECOND_HAND, MODULE_ERRAND) and not post.happened_at:
+            label = '交易时间' if post.type == MODULE_SECOND_HAND else '期望时间'
+            raise ValidationError(f'{label}为必填项', 1001)
 
         # 已通过的帖子被编辑后重新进入待审核（管理员编辑不受影响）
         if not user.is_admin and post_audit_enabled():
@@ -387,8 +393,11 @@ def update_status(post_id):
 
         payload = get_json()
         target = (payload.get('status') or '').strip()
-        if target not in POST_STATUSES:
-            raise ValidationError(f'状态取值非法，可选：{" / ".join(POST_STATUSES)}')
+        allowed = MODULE_ALLOWED_STATUSES.get(post.type, POST_STATUSES)
+        if target not in allowed:
+            raise ValidationError(
+                f'状态取值非法，本模块可选：{" / ".join(allowed)}'
+            )
 
         labels = MODULE_STATUS_LABELS.get(post.type, POST_STATUS_LABELS)
         svc.apply_status(post, target, operator=user, reason=payload.get('reason'))
@@ -411,12 +420,71 @@ def claim_post(post_id):
         post = svc.require_post(post_id)
         if not svc.can_edit(post, user):
             return error('只能操作自己发布的信息', CODE_FORBIDDEN, http_status=403)
+        if POST_CLAIMED not in MODULE_ALLOWED_STATUSES.get(post.type, POST_STATUSES):
+            return error('该模块不支持标记已认领', 1001)
         labels = MODULE_STATUS_LABELS.get(post.type, {POST_CLAIMED: '已认领'})
         svc.apply_status(post, POST_CLAIMED, operator=user)
         db.session.commit()
         write_operation_log('claim', module=post.type, target_type='post', target_id=post.id)
         return success(post.to_dict(),
                        msg=f'已标记为「{labels.get(POST_CLAIMED, "已认领")}」，该信息不再可查看详情')
+    except ValidationError as exc:
+        return as_error(exc)
+
+
+# ---------------------------------------------------------------------------
+# 拼单：修改人数（仅单主 / 管理员，且只对 group_buy 生效）
+# ---------------------------------------------------------------------------
+def _parse_count(value, field, minimum, maximum):
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValidationError(f'{field}必须是整数') from None
+    if not (minimum <= number <= maximum):
+        raise ValidationError(f'{field}需在 {minimum}-{maximum} 之间')
+    return number
+
+
+@bp.patch('/posts/<int:post_id>/count')
+@token_required
+def update_group_buy_count(post_id):
+    """修改拼单人数：只对 group_buy 生效，仅作者 / 管理员。
+
+    请求体至少包含 current_count / target_count 之一：
+        {"current_count": 3, "target_count": 5}
+    """
+    from ...utils.auth import current_user
+
+    try:
+        user = current_user()
+        post = svc.require_post(post_id)
+
+        #  硬校验：防止污染其它模块（该接口走通用帖子路由）
+        if post.type != MODULE_GROUP_BUY:
+            raise ValidationError('该模块不支持修改人数', 1001)
+        if not svc.can_edit(post, user):
+            return error('只能修改自己发布的拼单', CODE_FORBIDDEN, http_status=403)
+
+        payload = get_json()
+        has_current = 'current_count' in payload
+        has_target = 'target_count' in payload
+        if not has_current and not has_target:
+            raise ValidationError('至少需要提交 current_count 或 target_count')
+
+        ext = post._ext_dict()  # noqa: SLF001 - 内部序列化，集中在这里使用
+        if has_target:
+            ext['target_count'] = _parse_count(payload.get('target_count'), '目标人数', 1, 999)
+        if has_current:
+            ext['current_count'] = _parse_count(payload.get('current_count'), '当前人数', 0, 999)
+        post.ext_json = json.dumps(ext, ensure_ascii=False)
+        db.session.commit()
+
+        write_operation_log(
+            'update_count', module=post.type, target_type='post', target_id=post.id,
+            detail={'current_count': ext.get('current_count'),
+                    'target_count': ext.get('target_count')},
+        )
+        return success(post.to_dict(), msg='人数已更新')
     except ValidationError as exc:
         return as_error(exc)
 
@@ -440,8 +508,16 @@ def module_meta():
         'content': {'required': False, 'label': '描述'},
         'media': {'required': False, 'label': '图片/视频'},
         'location': {'required': False, 'label': '地点'},
-        'happened_at': {'required': False, 'label': '时间'},
-        'contact': {'required': True, 'label': '联系方式', 'public': True},
+        'happened_at': {
+            'required': module_code in (MODULE_SECOND_HAND, MODULE_ERRAND),
+            'label': '交易时间' if module_code == MODULE_SECOND_HAND else (
+                '期望时间' if module_code == MODULE_ERRAND else '时间'),
+        },
+        'contact': {
+            'required': svc.contact_required(module_code),
+            'label': '联系方式',
+            'public': True,
+        },
     }
     if module_code == MODULE_SECOND_HAND:
         fields.update({
@@ -450,11 +526,23 @@ def module_meta():
             'trade_type': {'required': False, 'label': '交易方式', 'type': 'string'},
             'original_price': {'required': False, 'label': '原价（元）', 'type': 'number'},
         })
+    if module_code == MODULE_GROUP_BUY:
+        fields.update({
+            'target_count': {'required': True, 'label': '目标人数', 'type': 'integer'},
+            'current_count': {'required': True, 'label': '当前人数', 'type': 'integer'},
+            'start_date': {'required': True, 'label': '开始日期', 'type': 'date'},
+        })
+
     status_labels = MODULE_STATUS_LABELS.get(module_code, POST_STATUS_LABELS)
+    allowed = MODULE_ALLOWED_STATUSES.get(module_code, POST_STATUSES)
     return success({
         'module': module_code,
         'name': get_config('site_name', '校园生活平台'),
-        'statuses': [{'value': key, 'label': label} for key, label in status_labels.items()],
+        'statuses': [
+            {'value': code,
+             'label': status_labels.get(code, POST_STATUS_LABELS.get(code, code))}
+            for code in allowed
+        ],
         'audit_statuses': [{'value': key, 'label': label} for key, label in AUDIT_STATUS_LABELS.items()],
         'fields': fields,
         'audit_enabled': post_audit_enabled(),

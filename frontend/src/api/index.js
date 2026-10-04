@@ -41,6 +41,7 @@ export const API = {
     create: '/lost_found/posts',
     update: (id) => `/lost_found/posts/${id}`,
     remove: (id) => `/lost_found/posts/${id}`,
+    count: (id) => `/lost_found/posts/${id}/count`,
     upload: '/lost_found/posts/upload',
     myPosts: '/lost_found/my/posts',
     status: (id) => `/lost_found/posts/${id}/status`,

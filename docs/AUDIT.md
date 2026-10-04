@@ -19,6 +19,7 @@
 | #2 | 2026-10-05 | 评估「管理员 / 普通用户 / 审核员」三级角色与指派链路、同机多账户会话 | **角色层可存、权限层为空、指派关系无表承载；同浏览器只能有一个账户有效** | 见 [ROLE_SESSION_ANALYSIS.md](ROLE_SESSION_ANALYSIS.md)（4 决策点 + 5 项会话缺陷） |
 | #3 | 2026-10-05 | 用户相关字段逐个盘点 + 权限问题成因定位 | **表结构无漂移、字段基本够用；根因是 `User.is_admin` 一个布尔值承担了两种语义，波及 20 处判定点** | P5 ~ P9 + D2 / D3，见 [USER_FIELDS.md](USER_FIELDS.md) |
 | **修复 #3** | 2026-10-05 | 落地审核员角色与审核指派（v1.4） | **P5、P6、P7 已关闭；D2、D3 已决策并实现**；新增 25 个回归用例 | P8（模块级授权悬空）、P9（token 版本）、会话链路 5 项 |
+| #4 | 2026-10-05 | v1.5（拼单 / 跑腿 / 日常三模块）上线后复检 | **ext_json 第三次验证通过；0 表 / 0 列 / 0 索引变更** | 无新增未关闭项 |
 
 > **审计 #2 / #3 独立成文**：角色适配性、会话链路与用户字段清单涉及前端 + 后端 + 数据结构三层，
 > 篇幅较长，分别放在 [ROLE_SESSION_ANALYSIS.md](ROLE_SESSION_ANALYSIS.md) 与
@@ -593,3 +594,40 @@ def is_admin(self):  return self.role in TRUE_ADMIN_ROLES     # 是不是真管�
 | `email` / `phone` 列 | 已建列，仅管理员可见，无业务逻辑 | 接短信 / 邮箱登录时启用 |
 | 服务端 token 黑名单 | `logout` 注释里留了位置 | 见 P9 |
 | WebSocket 私信 | `conversation_key` 已按会话设计 | 替换 `startPolling` 实现 |
+
+---
+
+# 审计 #4  2026-10-05（v1.5 三模块）
+
+**范围**：`group_buy` 拼单、`errand` 跑腿、`daily` 日常上线后的结构复检
+**触发**：v1.5 要求「不改数据库」，用 `ext_json` 承载第三个、第四个、第五个模块
+
+## 4.1 结论
+
+| 检查项 | 结果 |
+|---|---|
+| 表结构变更 |  0 新增表 / 0 新增列 / 0 新增索引（`upgrade_schema.py --check`） |
+| `ext_json` 承载能力 |  拼单人数 / 开始日期、二手交易价格 / 成色均真实落库并回读 |
+| 模块状态隔离 |  `MODULE_STATUS_LABELS` / `MODULE_ALLOWED_STATUSES` 按模块生效 |
+| 详情可见性 |  拼单 / 跑腿 / 日常流程结束后仍可回看；失物招领旧规则未回退 |
+| 搜索筛选 |  列表筛选改走 `GET /lost_found/meta?type=`，日常只返回 2 项状态 |
+| 联系方式 |  拼单 / 日常选填（存 `''`），跑腿 / 失物招领 / 二手交易必填 |
+| 拼单人数接口 |  仅作者 / 管理员可改；对其它模块硬校验返回 1001 |
+| 测试 |  `pytest tests -q` **167 passed**（含 v1.5 新增用例） |
+
+## 4.2 关键实现
+
+- `PATCH /lost_found/posts/{id}/count`
+  - 只对 `type='group_buy'` 生效；其它模块返回 1001，避免污染二手交易 / 失物招领
+  - `ext_json` 整体读出后重写，不允许直接改 dict
+- 「我要拼」直接复用 `POST /likes/posts/{id}`，`like_count` 只表达意向，**不自动改写 `ext.current_count`**
+- 前端新增 `src/config/moduleForms.js` 三个模块配置；
+  - `group_buy` 的 `start_date` 用 `component:'date'` 渲染
+  - 切换模块时通用字段保留，`happened_at` 与专属字段清空且不恢复
+- 统一发布入口 `/publish`；标题固定「发布信息」，类型由页面内「选择发布类型」决定
+
+## 4.3 未新增问题
+
+本模块复用 v1.2 帖子结构、v1.3 ext_json 机制与 v1.1/v1.4 的权限 / 审核机制，
+没有引入新的结构缺口；原待办 P4 / P8 / P9 与组队打车 / 交友模块继续保持原状态。
+
